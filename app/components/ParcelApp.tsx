@@ -95,6 +95,9 @@ export default function ParcelApp() {
     setMemo("");
     setSearchError("");
     setIsSearching(true);
+    setLivePermits([]);
+    setLiveZoning(undefined);
+    setLiveParcel(undefined);
     const parcel = matchParcel(query);
     setPermitError("");
     setZoningError("");
