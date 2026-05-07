@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { Parcel, parcels, sourceLinks } from "../data/sampleParcels";
 import { LivePermit } from "../data/livePermits";
+import { LiveZoning } from "../data/liveZoning";
 
 const ChicagoMap = dynamic(() => import("./ChicagoMap"), {
   ssr: false,
@@ -22,15 +23,18 @@ function matchParcel(query: string): Parcel | undefined {
   });
 }
 
-function buildMemo(parcel: Parcel) {
+function buildMemo(parcel: Parcel, liveZoning?: LiveZoning) {
   const activitySummary = parcel.activity
     .map((item) => `- ${item.type}: ${item.title} (${item.date}, ${item.distance})`)
     .join("\n");
+  const zoningClass = liveZoning?.zoningClass || parcel.zoning;
+  const overlaySummary =
+    liveZoning?.overlays.length ? liveZoning.overlays.map((overlay) => overlay.label).join(", ") : "None loaded";
 
   return `${parcel.title}
 
 First-pass summary:
-The selected parcel is identified as PIN ${parcel.pin} in Ward ${parcel.ward}, ${parcel.community}. The current sample zoning snapshot is ${parcel.zoning}. Applicable phase-1 flags: ${parcel.badges.join(", ")}.
+The selected parcel is identified as PIN ${parcel.pin} in Ward ${parcel.ward}, ${parcel.community}. The current zoning snapshot is ${zoningClass}. Applicable live overlay flags: ${overlaySummary}.
 
 Nearby approval and permit signals:
 ${activitySummary}
@@ -50,6 +54,8 @@ export default function ParcelApp() {
   const [memo, setMemo] = useState("");
   const [livePermits, setLivePermits] = useState<LivePermit[]>([]);
   const [permitError, setPermitError] = useState("");
+  const [liveZoning, setLiveZoning] = useState<LiveZoning | undefined>();
+  const [zoningError, setZoningError] = useState("");
 
   const isSaved = useMemo(
     () => (selectedParcel ? savedIds.has(selectedParcel.id) : false),
@@ -62,13 +68,17 @@ export default function ParcelApp() {
     const parcel = matchParcel(query);
     setSelectedParcel(parcel);
     if (!parcel) setLivePermits([]);
+    if (!parcel) setLiveZoning(undefined);
     setPermitError("");
+    setZoningError("");
   }
 
   function selectParcel(parcel: Parcel) {
     setSelectedParcel(parcel);
     setLivePermits([]);
+    setLiveZoning(undefined);
     setPermitError("");
+    setZoningError("");
     setMemo("");
   }
 
@@ -98,6 +108,31 @@ export default function ParcelApp() {
         if (error.name !== "AbortError") {
           setLivePermits([]);
           setPermitError("Live permit feed is unavailable right now.");
+        }
+      })
+      .catch(() => undefined);
+
+    return () => controller.abort();
+  }, [selectedParcel]);
+
+  useEffect(() => {
+    if (!selectedParcel) return;
+
+    const controller = new AbortController();
+    const [lng, lat] = selectedParcel.coordinates;
+
+    fetch(`/api/zoning?lat=${lat}&lng=${lng}`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unable to load live zoning.");
+        return response.json() as Promise<LiveZoning>;
+      })
+      .then((data) => setLiveZoning(data))
+      .catch((error: Error) => {
+        if (error.name !== "AbortError") {
+          setLiveZoning(undefined);
+          setZoningError("Live zoning feed is unavailable right now.");
         }
       })
       .catch(() => undefined);
@@ -185,10 +220,25 @@ export default function ParcelApp() {
                   Source
                 </a>
               </div>
-              <div className="zoning-code">{selectedParcel.zoning}</div>
-              <p>{selectedParcel.zoningSummary}</p>
+              <div className="zoning-code">{liveZoning?.zoningClass || selectedParcel.zoning}</div>
+              <p>
+                {liveZoning?.zoningClass
+                  ? "Official Chicago zoning service result for the selected point."
+                  : selectedParcel.zoningSummary}
+              </p>
+              {zoningError ? <p className="error-text">{zoningError}</p> : null}
+              {liveZoning?.ordinanceNumber ? (
+                <p className="muted">
+                  Ordinance {liveZoning.ordinanceNumber}
+                  {liveZoning.ordinanceDate ? ` - ${liveZoning.ordinanceDate}` : ""}
+                  {liveZoning.clerkDocument ? ` - ${liveZoning.clerkDocument}` : ""}
+                </p>
+              ) : null}
               <div className="badges">
-                {selectedParcel.badges.map((badge) => (
+                {(liveZoning?.overlays.length
+                  ? liveZoning.overlays.map((overlay) => overlay.label)
+                  : selectedParcel.badges
+                ).map((badge) => (
                   <span className="badge" key={badge}>
                     {badge}
                   </span>
@@ -251,7 +301,7 @@ export default function ParcelApp() {
             <section className="card">
               <div className="section-line">
                 <h3>Site Memo Draft</h3>
-                <button type="button" onClick={() => setMemo(buildMemo(selectedParcel))}>
+                <button type="button" onClick={() => setMemo(buildMemo(selectedParcel, liveZoning))}>
                   Generate
                 </button>
               </div>
