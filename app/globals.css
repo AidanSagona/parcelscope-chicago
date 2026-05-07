@@ -119,6 +119,67 @@ h1 {
     linear-gradient(105deg, #e8ece7 0%, #f4f6f2 42%, #e2e9e4 100%);
 }
 
+.real-map-shell,
+.real-map,
+.map-loading {
+  position: absolute;
+  inset: 0;
+}
+
+.map-loading {
+  display: grid;
+  place-items: center;
+  background: #e9eee9;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.maplibregl-ctrl-bottom-left {
+  bottom: 74px;
+  left: 24px;
+}
+
+.maplibregl-ctrl-bottom-right {
+  right: 18px;
+}
+
+.map-marker {
+  width: 32px;
+  height: 32px;
+  border: 3px solid #fff;
+  border-radius: 999px;
+  background: var(--green);
+  box-shadow: 0 10px 22px rgba(23, 32, 28, 0.24);
+  cursor: pointer;
+}
+
+.map-marker::after {
+  display: block;
+  width: 10px;
+  height: 10px;
+  margin: 8px auto;
+  border-radius: 999px;
+  background: #fff;
+  content: "";
+}
+
+.map-marker.active {
+  outline: 5px solid rgba(23, 111, 77, 0.24);
+}
+
+.approval-marker {
+  display: grid;
+  min-width: 54px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  background: var(--amber);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 8px 18px rgba(23, 32, 28, 0.18);
+}
+
 .chicago-grid {
   position: absolute;
   inset: 120px 70px 60px;

@@ -18,7 +18,7 @@ export type Parcel = {
   zoningSummary: string;
   badges: string[];
   activity: Activity[];
-  positionClass: string;
+  coordinates: [number, number];
 };
 
 export const sourceLinks = {
@@ -43,7 +43,7 @@ export const parcels: Parcel[] = [
     zoningSummary:
       "Downtown mixed-use district. Phase 1 treats district rules as source-linked reference data, not a legal zoning opinion.",
     badges: ["ARO area", "Downtown area", "Pedestrian street nearby"],
-    positionClass: "parcel-pin-a",
+    coordinates: [-87.6582, 41.8868],
     activity: [
       {
         type: "Plan Commission",
@@ -73,7 +73,7 @@ export const parcels: Parcel[] = [
     zoningSummary:
       "Community shopping district. Review overlays and recent ZBA activity before assuming by-right multifamily feasibility.",
     badges: ["Pedestrian street", "ZBA activity nearby"],
-    positionClass: "parcel-pin-b",
+    coordinates: [-87.6511, 41.9405],
     activity: [
       {
         type: "ZBA",
@@ -103,7 +103,7 @@ export const parcels: Parcel[] = [
     zoningSummary:
       "Downtown service district. Phase 2 should enrich this with parcel-to-overlay joins and nearby PD document links.",
     badges: ["PMD review needed", "Demo signal nearby"],
-    positionClass: "parcel-pin-c",
+    coordinates: [-87.6238, 41.8524],
     activity: [
       {
         type: "Demo",

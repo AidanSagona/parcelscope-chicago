@@ -1,7 +1,13 @@
 "use client";
 
 import { FormEvent, useMemo, useState } from "react";
+import dynamic from "next/dynamic";
 import { Parcel, parcels, sourceLinks } from "../data/sampleParcels";
+
+const ChicagoMap = dynamic(() => import("./ChicagoMap"), {
+  ssr: false,
+  loading: () => <div className="map-loading">Loading Chicago map...</div>,
+});
 
 function matchParcel(query: string): Parcel | undefined {
   const normalized = query.trim().toLowerCase();
@@ -90,36 +96,7 @@ export default function ParcelApp() {
           </form>
         </header>
 
-        <div className="map-stage">
-          <div className="chicago-grid" aria-hidden="true" />
-          {parcels.map((parcel) => (
-            <button
-              key={parcel.id}
-              className={`parcel-pin ${parcel.positionClass} ${
-                selectedParcel?.id === parcel.id ? "active" : ""
-              }`}
-              type="button"
-              aria-label={`Open parcel ${parcel.title}`}
-              onClick={() => selectParcel(parcel)}
-            >
-              <span />
-            </button>
-          ))}
-          <div className="approval approval-a">PD</div>
-          <div className="approval approval-b">ZBA</div>
-          <div className="approval approval-c">Demo</div>
-          <div className="approval approval-d">Permit</div>
-          <div className="map-legend">
-            <span>
-              <i className="legend-pin" />
-              Parcel
-            </span>
-            <span>
-              <i className="legend-approval" />
-              Approval activity
-            </span>
-          </div>
-        </div>
+        <ChicagoMap selectedParcel={selectedParcel} onSelectParcel={selectParcel} />
       </section>
 
       <aside className="detail-pane" aria-label="Parcel details">
