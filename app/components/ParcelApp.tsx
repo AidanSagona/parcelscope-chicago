@@ -1,7 +1,8 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
+import { GeocodeResult } from "../data/geocode";
 import { Parcel, parcels, sourceLinks } from "../data/sampleParcels";
 import { LivePermit } from "../data/livePermits";
 import { LiveZoning } from "../data/liveZoning";
@@ -21,6 +22,25 @@ function matchParcel(query: string): Parcel | undefined {
       .toLowerCase();
     return haystack.includes(normalized);
   });
+}
+
+function parcelFromGeocode(result: GeocodeResult, query: string): Parcel {
+  return {
+    id: `geocode-${result.coordinates.join("-")}`,
+    title: result.address,
+    pin: "Parcel join pending",
+    aliases: [query, result.address],
+    ward: "Pending parcel join",
+    community: result.postalCode ? `ZIP ${result.postalCode}` : "Chicago",
+    lotArea: "Pending parcel geometry",
+    zoning: "Live lookup",
+    zoningSummary:
+      "This is a geocoded address point. Zoning and permits are live; parcel boundary and PIN join are a later data-ingestion step.",
+    badges: ["Live address lookup"],
+    activity: [],
+    coordinates: result.coordinates,
+    source: "geocode",
+  };
 }
 
 function buildMemo(parcel: Parcel, liveZoning?: LiveZoning) {
@@ -56,31 +76,64 @@ export default function ParcelApp() {
   const [permitError, setPermitError] = useState("");
   const [liveZoning, setLiveZoning] = useState<LiveZoning | undefined>();
   const [zoningError, setZoningError] = useState("");
+  const [searchError, setSearchError] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
 
   const isSaved = useMemo(
     () => (selectedParcel ? savedIds.has(selectedParcel.id) : false),
     [savedIds, selectedParcel],
   );
 
-  function handleSearch(event: FormEvent<HTMLFormElement>) {
+  async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMemo("");
+    setSearchError("");
+    setIsSearching(true);
     const parcel = matchParcel(query);
-    setSelectedParcel(parcel);
-    if (!parcel) setLivePermits([]);
-    if (!parcel) setLiveZoning(undefined);
     setPermitError("");
     setZoningError("");
+
+    if (parcel) {
+      setSelectedParcel(parcel);
+      setIsSearching(false);
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
+      if (!response.ok) throw new Error("Address lookup failed.");
+
+      const data = (await response.json()) as { results: GeocodeResult[] };
+      const result = data.results[0];
+
+      if (!result) {
+        setSelectedParcel(undefined);
+        setLivePermits([]);
+        setLiveZoning(undefined);
+        setSearchError("No Chicago address match found. Try a fuller street address.");
+        return;
+      }
+
+      setSelectedParcel(parcelFromGeocode(result, query));
+    } catch {
+      setSelectedParcel(undefined);
+      setLivePermits([]);
+      setLiveZoning(undefined);
+      setSearchError("Address lookup is unavailable right now.");
+    } finally {
+      setIsSearching(false);
+    }
   }
 
-  function selectParcel(parcel: Parcel) {
+  const selectParcel = useCallback((parcel: Parcel) => {
     setSelectedParcel(parcel);
     setLivePermits([]);
     setLiveZoning(undefined);
     setPermitError("");
     setZoningError("");
+    setSearchError("");
     setMemo("");
-  }
+  }, []);
 
   function toggleSaved() {
     if (!selectedParcel) return;
@@ -160,7 +213,9 @@ export default function ParcelApp() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
             />
-            <button type="submit">Search</button>
+            <button type="submit" disabled={isSearching}>
+              {isSearching ? "Searching" : "Search"}
+            </button>
           </form>
         </header>
 
@@ -186,11 +241,12 @@ export default function ParcelApp() {
 
         {!selectedParcel ? (
           <div className="empty-state">
-            No matching parcel in this phase-1 sample. Try Fulton, Clark, Michigan, or a sample
-            PIN.
+            {searchError || "Search a Chicago address, sample site, or sample PIN."}
           </div>
         ) : (
           <>
+            {searchError ? <p className="error-text">{searchError}</p> : null}
+            {isSearching ? <p className="muted">Looking up Chicago address...</p> : null}
             <section className="card">
               <h3>Parcel Facts</h3>
               <dl className="fact-grid">
@@ -226,6 +282,12 @@ export default function ParcelApp() {
                   ? "Official Chicago zoning service result for the selected point."
                   : selectedParcel.zoningSummary}
               </p>
+              {selectedParcel.source === "geocode" ? (
+                <p className="muted">
+                  Address matched through the City GeoStreets geocoder. Parcel polygon/PIN join is
+                  the next ingestion step.
+                </p>
+              ) : null}
               {zoningError ? <p className="error-text">{zoningError}</p> : null}
               {liveZoning?.ordinanceNumber ? (
                 <p className="muted">

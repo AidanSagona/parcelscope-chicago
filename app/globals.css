@@ -111,6 +111,11 @@ h1 {
   cursor: pointer;
 }
 
+.search button:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
 .map-stage {
   position: absolute;
   inset: 0;
@@ -193,6 +198,20 @@ h1 {
   font-weight: 800;
   text-decoration: none;
   box-shadow: 0 8px 18px rgba(23, 32, 28, 0.18);
+}
+
+.search-marker {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border: 3px solid #fff;
+  border-radius: 999px;
+  background: #6b4fb3;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 800;
+  box-shadow: 0 10px 22px rgba(23, 32, 28, 0.24);
 }
 
 .chicago-grid {
@@ -312,7 +331,8 @@ h1 {
 
 .legend-pin,
 .legend-approval,
-.legend-permit {
+.legend-permit,
+.legend-search {
   width: 12px;
   height: 12px;
   display: inline-block;
@@ -330,6 +350,10 @@ h1 {
 
 .legend-permit {
   background: var(--blue);
+}
+
+.legend-search {
+  background: #6b4fb3;
 }
 
 .detail-pane {

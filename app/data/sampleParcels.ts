@@ -19,9 +19,12 @@ export type Parcel = {
   badges: string[];
   activity: Activity[];
   coordinates: [number, number];
+  source: "sample" | "geocode";
 };
 
 export const sourceLinks = {
+  geocoder:
+    "https://gisapps.chicago.gov/arcgis/rest/services/GeoStreets/GeocodeServer/findAddressCandidates",
   zoning:
     "https://gisapps.cityofchicago.org/arcgis/rest/services/ExternalApps/Zoning_update/MapServer/0",
   permits: "https://data.cityofchicago.org/Buildings/Building-Permits/ydr8-5enu",
@@ -60,6 +63,7 @@ export const parcels: Parcel[] = [
         url: sourceLinks.permits,
       },
     ],
+    source: "sample",
   },
   {
     id: "p2",
@@ -90,6 +94,7 @@ export const parcels: Parcel[] = [
         url: sourceLinks.permits,
       },
     ],
+    source: "sample",
   },
   {
     id: "p3",
@@ -120,5 +125,6 @@ export const parcels: Parcel[] = [
         url: sourceLinks.permits,
       },
     ],
+    source: "sample",
   },
 ];

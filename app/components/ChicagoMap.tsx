@@ -17,6 +17,7 @@ export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<globalThis.Map<string, Marker>>(new globalThis.Map());
+  const searchMarkerRef = useRef<Marker | null>(null);
   const permitMarkersRef = useRef<Marker[]>([]);
 
   useEffect(() => {
@@ -70,6 +71,7 @@ export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel
       mapRef.current = null;
       markers.clear();
       markersRef.current = new globalThis.Map<string, Marker>();
+      searchMarkerRef.current = null;
     };
   }, [onSelectParcel]);
 
@@ -79,6 +81,20 @@ export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel
     });
 
     if (selectedParcel && mapRef.current) {
+      if (selectedParcel.source === "geocode") {
+        searchMarkerRef.current?.remove();
+
+        const element = document.createElement("div");
+        element.className = "search-marker";
+        element.textContent = "S";
+        searchMarkerRef.current = new maplibregl.Marker({ element, anchor: "center" })
+          .setLngLat(selectedParcel.coordinates)
+          .addTo(mapRef.current);
+      } else {
+        searchMarkerRef.current?.remove();
+        searchMarkerRef.current = null;
+      }
+
       mapRef.current.flyTo({
         center: selectedParcel.coordinates,
         zoom: 14,
@@ -127,6 +143,10 @@ export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel
         <span>
           <i className="legend-permit" />
           Live permits
+        </span>
+        <span>
+          <i className="legend-search" />
+          Address result
         </span>
       </div>
     </div>
