@@ -5,16 +5,19 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef } from "react";
 import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
 import { Parcel, parcels } from "../data/sampleParcels";
+import { LivePermit } from "../data/livePermits";
 
 type ChicagoMapProps = {
   selectedParcel?: Parcel;
+  livePermits: LivePermit[];
   onSelectParcel: (parcel: Parcel) => void;
 };
 
-export default function ChicagoMap({ selectedParcel, onSelectParcel }: ChicagoMapProps) {
+export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel }: ChicagoMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<globalThis.Map<string, Marker>>(new globalThis.Map());
+  const permitMarkersRef = useRef<Marker[]>([]);
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -84,6 +87,31 @@ export default function ChicagoMap({ selectedParcel, onSelectParcel }: ChicagoMa
     }
   }, [selectedParcel]);
 
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    permitMarkersRef.current.forEach((marker) => marker.remove());
+    permitMarkersRef.current = livePermits.map((permit) => {
+      const element = document.createElement("a");
+      element.className = "permit-marker";
+      element.href = permit.sourceUrl;
+      element.target = "_blank";
+      element.rel = "noreferrer";
+      element.setAttribute("aria-label", `Open permit ${permit.permitNumber}`);
+      element.textContent = "P";
+
+      return new maplibregl.Marker({ element, anchor: "center" })
+        .setLngLat(permit.coordinates)
+        .addTo(map);
+    });
+
+    return () => {
+      permitMarkersRef.current.forEach((marker) => marker.remove());
+      permitMarkersRef.current = [];
+    };
+  }, [livePermits]);
+
   return (
     <div className="real-map-shell">
       <div ref={containerRef} className="real-map" />
@@ -95,6 +123,10 @@ export default function ChicagoMap({ selectedParcel, onSelectParcel }: ChicagoMa
         <span>
           <i className="legend-approval" />
           Approval activity
+        </span>
+        <span>
+          <i className="legend-permit" />
+          Live permits
         </span>
       </div>
     </div>

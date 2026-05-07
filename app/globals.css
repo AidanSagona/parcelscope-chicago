@@ -180,6 +180,21 @@ h1 {
   box-shadow: 0 8px 18px rgba(23, 32, 28, 0.18);
 }
 
+.permit-marker {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border: 2px solid #fff;
+  border-radius: 4px;
+  background: var(--blue);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  box-shadow: 0 8px 18px rgba(23, 32, 28, 0.18);
+}
+
 .chicago-grid {
   position: absolute;
   inset: 120px 70px 60px;
@@ -296,7 +311,8 @@ h1 {
 }
 
 .legend-pin,
-.legend-approval {
+.legend-approval,
+.legend-permit {
   width: 12px;
   height: 12px;
   display: inline-block;
@@ -310,6 +326,10 @@ h1 {
 .legend-approval {
   border-radius: 2px;
   background: var(--amber);
+}
+
+.legend-permit {
+  background: var(--blue);
 }
 
 .detail-pane {
@@ -418,6 +438,14 @@ dd {
   color: #33443c;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.error-text {
+  color: #9a2f22;
 }
 
 .empty-state {

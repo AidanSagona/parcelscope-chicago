@@ -1,8 +1,9 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { Parcel, parcels, sourceLinks } from "../data/sampleParcels";
+import { LivePermit } from "../data/livePermits";
 
 const ChicagoMap = dynamic(() => import("./ChicagoMap"), {
   ssr: false,
@@ -47,6 +48,8 @@ export default function ParcelApp() {
   const [query, setQuery] = useState("");
   const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
   const [memo, setMemo] = useState("");
+  const [livePermits, setLivePermits] = useState<LivePermit[]>([]);
+  const [permitError, setPermitError] = useState("");
 
   const isSaved = useMemo(
     () => (selectedParcel ? savedIds.has(selectedParcel.id) : false),
@@ -56,11 +59,16 @@ export default function ParcelApp() {
   function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setMemo("");
-    setSelectedParcel(matchParcel(query));
+    const parcel = matchParcel(query);
+    setSelectedParcel(parcel);
+    if (!parcel) setLivePermits([]);
+    setPermitError("");
   }
 
   function selectParcel(parcel: Parcel) {
     setSelectedParcel(parcel);
+    setLivePermits([]);
+    setPermitError("");
     setMemo("");
   }
 
@@ -71,6 +79,31 @@ export default function ParcelApp() {
     else nextSaved.add(selectedParcel.id);
     setSavedIds(nextSaved);
   }
+
+  useEffect(() => {
+    if (!selectedParcel) return;
+
+    const controller = new AbortController();
+    const [lng, lat] = selectedParcel.coordinates;
+
+    fetch(`/api/permits?lat=${lat}&lng=${lng}&radiusFeet=1200&limit=8`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unable to load live permits.");
+        return response.json() as Promise<{ permits: LivePermit[] }>;
+      })
+      .then((data) => setLivePermits(data.permits))
+      .catch((error: Error) => {
+        if (error.name !== "AbortError") {
+          setLivePermits([]);
+          setPermitError("Live permit feed is unavailable right now.");
+        }
+      })
+      .catch(() => undefined);
+
+    return () => controller.abort();
+  }, [selectedParcel]);
 
   return (
     <main className="app-shell">
@@ -96,7 +129,11 @@ export default function ParcelApp() {
           </form>
         </header>
 
-        <ChicagoMap selectedParcel={selectedParcel} onSelectParcel={selectParcel} />
+        <ChicagoMap
+          selectedParcel={selectedParcel}
+          livePermits={livePermits}
+          onSelectParcel={selectParcel}
+        />
       </section>
 
       <aside className="detail-pane" aria-label="Parcel details">
@@ -161,7 +198,7 @@ export default function ParcelApp() {
 
             <section className="card">
               <div className="section-line">
-                <h3>Nearby Activity</h3>
+                <h3>Sample Activity</h3>
                 <span>500 ft</span>
               </div>
               <ol className="activity-list">
@@ -171,11 +208,41 @@ export default function ParcelApp() {
                       {item.type}: {item.title}
                     </strong>
                     <span>
-                      {item.date} · {item.distance} ·{" "}
+                      {item.date} - {item.distance} -{" "}
                       <a href={item.url} target="_blank" rel="noreferrer">
                         Source
                       </a>
                     </span>
+                  </li>
+                ))}
+              </ol>
+            </section>
+
+            <section className="card">
+              <div className="section-line">
+                <h3>Live Chicago Permits</h3>
+                <a href={sourceLinks.permits} target="_blank" rel="noreferrer">
+                  Source
+                </a>
+              </div>
+              {permitError ? <p className="error-text">{permitError}</p> : null}
+              {!permitError && livePermits.length === 0 ? (
+                <p className="muted">No permits loaded yet or none found within 1,200 feet.</p>
+              ) : null}
+              <ol className="activity-list">
+                {livePermits.map((permit) => (
+                  <li key={permit.id}>
+                    <strong>
+                      {permit.type}: {permit.address || permit.permitNumber}
+                    </strong>
+                    <span>
+                      {permit.issueDate?.slice(0, 10) || "Unknown date"} -{" "}
+                      {permit.reviewType || "Review type unavailable"} -{" "}
+                      <a href={permit.sourceUrl} target="_blank" rel="noreferrer">
+                        Source
+                      </a>
+                    </span>
+                    {permit.description ? <p>{permit.description}</p> : null}
                   </li>
                 ))}
               </ol>
