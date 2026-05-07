@@ -39,11 +39,14 @@ input {
 .app-shell {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 420px;
+  height: 100vh;
   min-height: 100vh;
+  overflow: hidden;
 }
 
 .map-pane {
   position: relative;
+  height: 100vh;
   min-height: 100vh;
   overflow: hidden;
   background: #e9eee9;
@@ -146,6 +149,10 @@ h1 {
 
 .maplibregl-ctrl-bottom-right {
   right: 18px;
+}
+
+.maplibregl-marker {
+  z-index: 3;
 }
 
 .map-marker {
@@ -357,6 +364,7 @@ h1 {
 }
 
 .detail-pane {
+  height: 100vh;
   min-height: 100vh;
   overflow-y: auto;
   border-left: 1px solid var(--line);
@@ -495,9 +503,12 @@ dd {
 @media (max-width: 900px) {
   .app-shell {
     grid-template-columns: 1fr;
+    height: auto;
+    overflow: visible;
   }
 
   .map-pane {
+    height: 58vh;
     min-height: 58vh;
   }
 
@@ -511,6 +522,7 @@ dd {
   }
 
   .detail-pane {
+    height: auto;
     min-height: auto;
     border-left: 0;
     border-top: 1px solid var(--line);

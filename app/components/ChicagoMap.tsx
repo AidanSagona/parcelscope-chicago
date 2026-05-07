@@ -1,9 +1,7 @@
 "use client";
 
-import "maplibre-gl/dist/maplibre-gl.css";
-
 import { useEffect, useRef } from "react";
-import maplibregl, { Map as MapLibreMap, Marker } from "maplibre-gl";
+import maplibregl, { Map as MapLibreMap, Marker, type StyleSpecification } from "maplibre-gl";
 import { Parcel, parcels } from "../data/sampleParcels";
 import { LivePermit } from "../data/livePermits";
 
@@ -11,6 +9,32 @@ type ChicagoMapProps = {
   selectedParcel?: Parcel;
   livePermits: LivePermit[];
   onSelectParcel: (parcel: Parcel) => void;
+};
+
+const CHICAGO_BASEMAP_STYLE: StyleSpecification = {
+  version: 8,
+  sources: {
+    cartoLight: {
+      type: "raster",
+      tiles: [
+        "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
+        "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
+        "https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}@2x.png",
+      ],
+      tileSize: 256,
+      attribution:
+        '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+    },
+  },
+  layers: [
+    {
+      id: "carto-light",
+      type: "raster",
+      source: "cartoLight",
+      minzoom: 0,
+      maxzoom: 20,
+    },
+  ],
 };
 
 export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel }: ChicagoMapProps) {
@@ -23,9 +47,10 @@ export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
 
+    const container = containerRef.current;
     const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+      container,
+      style: CHICAGO_BASEMAP_STYLE,
       center: [-87.6298, 41.8781],
       zoom: 11.2,
       attributionControl: false,
@@ -66,7 +91,14 @@ export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel
     mapRef.current = map;
     markersRef.current = markers;
 
+    const resizeObserver = new ResizeObserver(() => map.resize());
+    resizeObserver.observe(container);
+    map.once("load", () => map.resize());
+    requestAnimationFrame(() => map.resize());
+    window.setTimeout(() => map.resize(), 250);
+
     return () => {
+      resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
       markers.clear();
