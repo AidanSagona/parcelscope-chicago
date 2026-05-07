@@ -2,14 +2,25 @@
 
 import { useEffect, useRef } from "react";
 import maplibregl, { Map as MapLibreMap, Marker, type StyleSpecification } from "maplibre-gl";
+import type { Feature, Polygon } from "geojson";
+import { LiveParcel } from "../data/liveParcel";
 import { Parcel, parcels } from "../data/sampleParcels";
 import { LivePermit } from "../data/livePermits";
 
 type ChicagoMapProps = {
   selectedParcel?: Parcel;
+  liveParcel?: LiveParcel;
   livePermits: LivePermit[];
   onSelectParcel: (parcel: Parcel) => void;
 };
+
+type MutableGeoJsonSource = {
+  setData: (data: Feature<Polygon>) => void;
+};
+
+const PARCEL_SOURCE_ID = "selected-parcel-source";
+const PARCEL_FILL_LAYER_ID = "selected-parcel-fill";
+const PARCEL_LINE_LAYER_ID = "selected-parcel-line";
 
 const CHICAGO_BASEMAP_STYLE: StyleSpecification = {
   version: 8,
@@ -37,7 +48,12 @@ const CHICAGO_BASEMAP_STYLE: StyleSpecification = {
   ],
 };
 
-export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel }: ChicagoMapProps) {
+export default function ChicagoMap({
+  selectedParcel,
+  liveParcel,
+  livePermits,
+  onSelectParcel,
+}: ChicagoMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const markersRef = useRef<globalThis.Map<string, Marker>>(new globalThis.Map());
@@ -159,6 +175,68 @@ export default function ChicagoMap({ selectedParcel, livePermits, onSelectParcel
       permitMarkersRef.current = [];
     };
   }, [livePermits]);
+
+  useEffect(() => {
+    const activeMap = mapRef.current;
+    if (!activeMap) return;
+    const mapInstance: MapLibreMap = activeMap;
+
+    function removeBoundary() {
+      if (mapInstance.getLayer(PARCEL_LINE_LAYER_ID)) mapInstance.removeLayer(PARCEL_LINE_LAYER_ID);
+      if (mapInstance.getLayer(PARCEL_FILL_LAYER_ID)) mapInstance.removeLayer(PARCEL_FILL_LAYER_ID);
+      if (mapInstance.getSource(PARCEL_SOURCE_ID)) mapInstance.removeSource(PARCEL_SOURCE_ID);
+    }
+
+    function upsertBoundary() {
+      if (!liveParcel?.geometry) {
+        removeBoundary();
+        return;
+      }
+
+      const feature: Feature<Polygon> = {
+        type: "Feature",
+        properties: {
+          pin: liveParcel.pin,
+        },
+        geometry: liveParcel.geometry,
+      };
+
+      const existingSource = mapInstance.getSource(PARCEL_SOURCE_ID) as
+        | MutableGeoJsonSource
+        | undefined;
+
+      if (existingSource) {
+        existingSource.setData(feature);
+        return;
+      }
+
+      mapInstance.addSource(PARCEL_SOURCE_ID, {
+        type: "geojson",
+        data: feature,
+      });
+      mapInstance.addLayer({
+        id: PARCEL_FILL_LAYER_ID,
+        type: "fill",
+        source: PARCEL_SOURCE_ID,
+        paint: {
+          "fill-color": "#176f4d",
+          "fill-opacity": 0.14,
+        },
+      });
+      mapInstance.addLayer({
+        id: PARCEL_LINE_LAYER_ID,
+        type: "line",
+        source: PARCEL_SOURCE_ID,
+        paint: {
+          "line-color": "#176f4d",
+          "line-width": 3,
+        },
+      });
+    }
+
+    if (mapInstance.isStyleLoaded()) upsertBoundary();
+    else mapInstance.once("load", upsertBoundary);
+  }, [liveParcel]);
 
   return (
     <div className="real-map-shell">

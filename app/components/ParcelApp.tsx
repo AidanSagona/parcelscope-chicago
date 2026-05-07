@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { GeocodeResult } from "../data/geocode";
+import { LiveParcel } from "../data/liveParcel";
 import { Parcel, parcels, sourceLinks } from "../data/sampleParcels";
 import { LivePermit } from "../data/livePermits";
 import { LiveZoning } from "../data/liveZoning";
@@ -43,18 +44,21 @@ function parcelFromGeocode(result: GeocodeResult, query: string): Parcel {
   };
 }
 
-function buildMemo(parcel: Parcel, liveZoning?: LiveZoning) {
+function buildMemo(parcel: Parcel, liveZoning?: LiveZoning, liveParcel?: LiveParcel) {
   const activitySummary = parcel.activity
     .map((item) => `- ${item.type}: ${item.title} (${item.date}, ${item.distance})`)
     .join("\n");
   const zoningClass = liveZoning?.zoningClass || parcel.zoning;
+  const pin = liveParcel?.pin || parcel.pin;
+  const ward = liveParcel?.ward || parcel.ward;
+  const lotArea = liveParcel?.lotArea || parcel.lotArea;
   const overlaySummary =
     liveZoning?.overlays.length ? liveZoning.overlays.map((overlay) => overlay.label).join(", ") : "None loaded";
 
   return `${parcel.title}
 
 First-pass summary:
-The selected parcel is identified as PIN ${parcel.pin} in Ward ${parcel.ward}, ${parcel.community}. The current zoning snapshot is ${zoningClass}. Applicable live overlay flags: ${overlaySummary}.
+The selected parcel is identified as PIN ${pin} in Ward ${ward}, ${parcel.community}. Lot area is ${lotArea}. The current zoning snapshot is ${zoningClass}. Applicable live overlay flags: ${overlaySummary}.
 
 Nearby approval and permit signals:
 ${activitySummary}
@@ -76,6 +80,8 @@ export default function ParcelApp() {
   const [permitError, setPermitError] = useState("");
   const [liveZoning, setLiveZoning] = useState<LiveZoning | undefined>();
   const [zoningError, setZoningError] = useState("");
+  const [liveParcel, setLiveParcel] = useState<LiveParcel | undefined>();
+  const [parcelError, setParcelError] = useState("");
   const [searchError, setSearchError] = useState("");
   const [isSearching, setIsSearching] = useState(false);
 
@@ -92,6 +98,7 @@ export default function ParcelApp() {
     const parcel = matchParcel(query);
     setPermitError("");
     setZoningError("");
+    setParcelError("");
 
     if (parcel) {
       setSelectedParcel(parcel);
@@ -110,6 +117,7 @@ export default function ParcelApp() {
         setSelectedParcel(undefined);
         setLivePermits([]);
         setLiveZoning(undefined);
+        setLiveParcel(undefined);
         setSearchError("No Chicago address match found. Try a fuller street address.");
         return;
       }
@@ -119,6 +127,7 @@ export default function ParcelApp() {
       setSelectedParcel(undefined);
       setLivePermits([]);
       setLiveZoning(undefined);
+      setLiveParcel(undefined);
       setSearchError("Address lookup is unavailable right now.");
     } finally {
       setIsSearching(false);
@@ -129,8 +138,10 @@ export default function ParcelApp() {
     setSelectedParcel(parcel);
     setLivePermits([]);
     setLiveZoning(undefined);
+    setLiveParcel(undefined);
     setPermitError("");
     setZoningError("");
+    setParcelError("");
     setSearchError("");
     setMemo("");
   }, []);
@@ -161,6 +172,31 @@ export default function ParcelApp() {
         if (error.name !== "AbortError") {
           setLivePermits([]);
           setPermitError("Live permit feed is unavailable right now.");
+        }
+      })
+      .catch(() => undefined);
+
+    return () => controller.abort();
+  }, [selectedParcel]);
+
+  useEffect(() => {
+    if (!selectedParcel) return;
+
+    const controller = new AbortController();
+    const [lng, lat] = selectedParcel.coordinates;
+
+    fetch(`/api/parcel?lat=${lat}&lng=${lng}`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unable to load live parcel.");
+        return response.json() as Promise<{ parcel: LiveParcel }>;
+      })
+      .then((data) => setLiveParcel(data.parcel))
+      .catch((error: Error) => {
+        if (error.name !== "AbortError") {
+          setLiveParcel(undefined);
+          setParcelError("Cook County parcel lookup is unavailable right now.");
         }
       })
       .catch(() => undefined);
@@ -221,6 +257,7 @@ export default function ParcelApp() {
 
         <ChicagoMap
           selectedParcel={selectedParcel}
+          liveParcel={liveParcel}
           livePermits={livePermits}
           onSelectParcel={selectParcel}
         />
@@ -248,25 +285,37 @@ export default function ParcelApp() {
             {searchError ? <p className="error-text">{searchError}</p> : null}
             {isSearching ? <p className="muted">Looking up Chicago address...</p> : null}
             <section className="card">
-              <h3>Parcel Facts</h3>
+              <div className="section-line">
+                <h3>Parcel Facts</h3>
+                <a href={sourceLinks.parcels} target="_blank" rel="noreferrer">
+                  Source
+                </a>
+              </div>
               <dl className="fact-grid">
                 <div>
                   <dt>PIN</dt>
-                  <dd>{selectedParcel.pin}</dd>
+                  <dd>{liveParcel?.pin || selectedParcel.pin}</dd>
                 </div>
                 <div>
                   <dt>Ward</dt>
-                  <dd>{selectedParcel.ward}</dd>
+                  <dd>{liveParcel ? liveParcel.ward || "Unavailable" : selectedParcel.ward}</dd>
                 </div>
                 <div>
-                  <dt>Community area</dt>
-                  <dd>{selectedParcel.community}</dd>
+                  <dt>{liveParcel?.municipality ? "Municipality" : "Community area"}</dt>
+                  <dd>{liveParcel?.municipality || selectedParcel.community}</dd>
                 </div>
                 <div>
                   <dt>Lot area</dt>
-                  <dd>{selectedParcel.lotArea}</dd>
+                  <dd>{liveParcel?.lotArea || selectedParcel.lotArea}</dd>
                 </div>
               </dl>
+              {liveParcel?.parcelType ? (
+                <p className="muted parcel-source-line">
+                  Parcel type: {liveParcel.parcelType}. Matched {liveParcel.distanceFeet} ft from
+                  search point.
+                </p>
+              ) : null}
+              {parcelError ? <p className="error-text">{parcelError}</p> : null}
             </section>
 
             <section className="card">
@@ -282,7 +331,12 @@ export default function ParcelApp() {
                   ? "Official Chicago zoning service result for the selected point."
                   : selectedParcel.zoningSummary}
               </p>
-              {selectedParcel.source === "geocode" ? (
+              {selectedParcel.source === "geocode" && liveParcel ? (
+                <p className="muted">
+                  Cook County parcel matched from the geocoded address and outlined on the map.
+                </p>
+              ) : null}
+              {selectedParcel.source === "geocode" && !liveParcel ? (
                 <p className="muted">
                   Address matched through the City GeoStreets geocoder. Parcel polygon/PIN join is
                   the next ingestion step.
@@ -363,7 +417,10 @@ export default function ParcelApp() {
             <section className="card">
               <div className="section-line">
                 <h3>Site Memo Draft</h3>
-                <button type="button" onClick={() => setMemo(buildMemo(selectedParcel, liveZoning))}>
+                <button
+                  type="button"
+                  onClick={() => setMemo(buildMemo(selectedParcel, liveZoning, liveParcel))}
+                >
                   Generate
                 </button>
               </div>

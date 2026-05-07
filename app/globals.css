@@ -480,6 +480,11 @@ dd {
   color: #9a2f22;
 }
 
+.parcel-source-line {
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
 .empty-state {
   margin-top: 22px;
   padding: 18px;

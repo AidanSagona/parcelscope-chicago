@@ -25,6 +25,7 @@ export type Parcel = {
 export const sourceLinks = {
   geocoder:
     "https://gisapps.chicago.gov/arcgis/rest/services/GeoStreets/GeocodeServer/findAddressCandidates",
+  parcels: "https://gis12.cookcountyil.gov/arcgis/rest/services/parcelHistorical/MapServer/2025",
   zoning:
     "https://gisapps.cityofchicago.org/arcgis/rest/services/ExternalApps/Zoning_update/MapServer/0",
   permits: "https://data.cityofchicago.org/Buildings/Building-Permits/ydr8-5enu",
