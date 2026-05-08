@@ -364,6 +364,21 @@ h1 {
   font-size: 13px;
 }
 
+.parcel-map-status {
+  position: absolute;
+  z-index: 4;
+  left: 24px;
+  top: 112px;
+  max-width: min(420px, calc(100vw - 470px));
+  padding: 9px 11px;
+  border: 1px solid rgba(23, 32, 28, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  box-shadow: 0 8px 20px rgba(23, 32, 28, 0.1);
+}
+
 .map-legend span {
   display: inline-flex;
   align-items: center;
@@ -371,6 +386,8 @@ h1 {
 }
 
 .legend-pin,
+.legend-parcels,
+.legend-selected,
 .legend-approval,
 .legend-permit,
 .legend-search {
@@ -382,6 +399,18 @@ h1 {
 
 .legend-pin {
   background: var(--green);
+}
+
+.legend-parcels {
+  border: 1px solid #245c48;
+  border-radius: 2px;
+  background: rgba(30, 122, 84, 0.18);
+}
+
+.legend-selected {
+  border: 2px solid #0c3b2a;
+  border-radius: 2px;
+  background: rgba(23, 111, 77, 0.32);
 }
 
 .legend-approval {
@@ -623,6 +652,12 @@ dd {
 
   .auth-actions {
     justify-content: flex-end;
+  }
+
+  .parcel-map-status {
+    top: auto;
+    bottom: 76px;
+    max-width: calc(100vw - 48px);
   }
 
   .detail-pane {

@@ -134,6 +134,35 @@ async function queryParcels(lat: number, lng: number, distanceFeet?: number) {
   return (await response.json()) as ArcGisParcelResponse;
 }
 
+async function queryParcelByPin(pin: string) {
+  const digits = pin.replace(/\D/g, "");
+  const where =
+    digits.length >= 14
+      ? `Name='${digits.slice(0, 14)}'`
+      : digits.length >= 10
+        ? `PIN10='${digits.slice(0, 10)}'`
+        : "";
+
+  if (!where) return { features: [] } satisfies ArcGisParcelResponse;
+
+  const params = new URLSearchParams({
+    f: "json",
+    where,
+    outFields: "OBJECTID,Name,PIN10,Ward,MUNICIPALITY,PARCELTYPE,Shape_Area",
+    returnGeometry: "true",
+    outSR: "4326",
+    resultRecordCount: "5",
+  });
+
+  const response = await fetch(`${PARCEL_QUERY_URL}?${params.toString()}`, {
+    headers: { Accept: "application/json" },
+    next: { revalidate: 86400 },
+  });
+
+  if (!response.ok) throw new Error("Cook County PIN query failed.");
+  return (await response.json()) as ArcGisParcelResponse;
+}
+
 function normalizeParcel(feature: ArcGisParcelFeature, lat: number, lng: number): LiveParcel | null {
   const attributes = feature.attributes || {};
   const rawPin = attributes.Name;
@@ -162,10 +191,32 @@ function normalizeParcel(feature: ArcGisParcelFeature, lat: number, lng: number)
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
+  const pin = searchParams.get("pin");
   const lat = numberFromParam(searchParams.get("lat"), 41.8781);
   const lng = numberFromParam(searchParams.get("lng"), -87.6298);
 
   try {
+    if (pin) {
+      const response = await queryParcelByPin(pin);
+      const parcels = (response.features || [])
+        .map((feature) => {
+          const rings = feature.geometry?.rings;
+          const firstPoint = rings?.[0]?.[0];
+          return normalizeParcel(feature, firstPoint?.[1] || lat, firstPoint?.[0] || lng);
+        })
+        .filter((parcel): parcel is LiveParcel => Boolean(parcel));
+
+      if (!parcels.length) {
+        return NextResponse.json({ error: "No Cook County parcel found for that PIN." }, { status: 404 });
+      }
+
+      return NextResponse.json({
+        source: PARCEL_LAYER,
+        parcel: parcels[0],
+        candidates: parcels.slice(0, 5),
+      });
+    }
+
     let response = await queryParcels(lat, lng);
     if (!response.features?.length) response = await queryParcels(lat, lng, 150);
 

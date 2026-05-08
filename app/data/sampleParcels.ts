@@ -19,7 +19,7 @@ export type Parcel = {
   badges: string[];
   activity: Activity[];
   coordinates: [number, number];
-  source: "sample" | "geocode";
+  source: "sample" | "geocode" | "map";
 };
 
 export const sourceLinks = {

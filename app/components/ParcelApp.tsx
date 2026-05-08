@@ -38,11 +38,52 @@ function parcelFromGeocode(result: GeocodeResult, query: string): Parcel {
     lotArea: "Pending parcel geometry",
     zoning: "Live lookup",
     zoningSummary:
-      "This is a geocoded address point. Zoning and permits are live; parcel boundary and PIN join are a later data-ingestion step.",
+      "This is a geocoded address point. Parcel boundary, zoning, overlays, and permits refresh from official feeds.",
     badges: ["Live address lookup"],
     activity: [],
     coordinates: result.coordinates,
     source: "geocode",
+  };
+}
+
+function coordinatesFromLiveParcel(parcel: LiveParcel): [number, number] {
+  const firstRing = parcel.geometry?.coordinates[0] || [];
+  if (!firstRing.length) return [-87.6298, 41.8781];
+
+  const bounds = firstRing.reduce(
+    (current, [lng, lat]) => ({
+      west: Math.min(current.west, lng),
+      south: Math.min(current.south, lat),
+      east: Math.max(current.east, lng),
+      north: Math.max(current.north, lat),
+    }),
+    {
+      west: Number.POSITIVE_INFINITY,
+      south: Number.POSITIVE_INFINITY,
+      east: Number.NEGATIVE_INFINITY,
+      north: Number.NEGATIVE_INFINITY,
+    },
+  );
+
+  return [(bounds.west + bounds.east) / 2, (bounds.south + bounds.north) / 2];
+}
+
+function parcelFromLiveParcel(parcel: LiveParcel, query: string): Parcel {
+  return {
+    id: `map-parcel-${parcel.objectId}`,
+    title: `Parcel ${parcel.pin}`,
+    pin: parcel.pin,
+    aliases: [query, parcel.pin, parcel.rawPin, parcel.pin10 || ""].filter(Boolean),
+    ward: parcel.ward || "Unavailable",
+    community: parcel.municipality || "Chicago",
+    lotArea: parcel.lotArea,
+    zoning: "Live lookup",
+    zoningSummary:
+      "Cook County parcel selected from the live parcel feed. Zoning, overlays, and permits refresh from official feeds.",
+    badges: ["Cook County parcel"],
+    activity: [],
+    coordinates: coordinatesFromLiveParcel(parcel),
+    source: "map",
   };
 }
 
@@ -79,7 +120,7 @@ First-pass summary:
 The selected parcel is identified as PIN ${pin} in Ward ${ward}, ${parcel.community}. Lot area is ${lotArea}. The current zoning snapshot is ${zoningClass}. Applicable live overlay flags: ${overlaySummary}.
 
 Nearby approval and permit signals:
-${activitySummary || "- No sample approval activity loaded for this address."}
+${activitySummary || "- No discretionary approval activity loaded for this parcel yet."}
 
 Live permit feed:
 ${permitSummary}
@@ -200,6 +241,17 @@ export default function ParcelApp() {
     }
 
     try {
+      const pinDigits = query.replace(/\D/g, "");
+      if (pinDigits.length >= 10) {
+        const pinResponse = await fetch(`/api/parcel?pin=${encodeURIComponent(pinDigits)}`);
+        if (pinResponse.ok) {
+          const pinData = (await pinResponse.json()) as { parcel: LiveParcel };
+          setLiveParcel(pinData.parcel);
+          setSelectedParcel(parcelFromLiveParcel(pinData.parcel, query));
+          return;
+        }
+      }
+
       const response = await fetch(`/api/geocode?q=${encodeURIComponent(query)}`);
       if (!response.ok) throw new Error("Address lookup failed.");
 
@@ -495,7 +547,7 @@ export default function ParcelApp() {
 
         {!selectedParcel ? (
           <div className="empty-state">
-            {searchError || "Search a Chicago address, sample site, or sample PIN."}
+            {searchError || "Search a Chicago address or click any parcel on the map."}
           </div>
         ) : (
           <>
@@ -615,6 +667,11 @@ export default function ParcelApp() {
                   Cook County parcel matched from the geocoded address and outlined on the map.
                 </p>
               ) : null}
+              {selectedParcel.source === "map" ? (
+                <p className="muted">
+                  Parcel selected from the live Cook County map layer.
+                </p>
+              ) : null}
               {selectedParcel.source === "geocode" && !liveParcel ? (
                 <p className="muted">
                   Address matched through the City GeoStreets geocoder. Parcel polygon/PIN join is
@@ -643,9 +700,12 @@ export default function ParcelApp() {
 
             <section className="card">
               <div className="section-line">
-                <h3>Sample Activity</h3>
+                <h3>Approval Activity</h3>
                 <span>500 ft</span>
               </div>
+              {selectedParcel.activity.length === 0 ? (
+                <p className="muted">No discretionary approval events loaded for this parcel yet.</p>
+              ) : null}
               <ol className="activity-list">
                 {selectedParcel.activity.map((item) => (
                   <li key={`${item.type}-${item.title}`}>

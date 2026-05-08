@@ -2,6 +2,7 @@ import { auth } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { getRedis, watchlistKey } from "../../lib/watchlistStore";
 import { SavedParcel } from "../../data/watchlist";
+import type { Parcel } from "../../data/sampleParcels";
 
 function asString(value: unknown, fallback = "") {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
@@ -25,6 +26,10 @@ function asStringArray(value: unknown): string[] {
   return value.filter((item): item is string => typeof item === "string");
 }
 
+function asParcelSource(value: unknown): Parcel["source"] {
+  return value === "geocode" || value === "map" ? value : "sample";
+}
+
 function parseStoredParcel(value: unknown): SavedParcel | null {
   const parsed = typeof value === "string" ? JSON.parse(value) : value;
 
@@ -46,7 +51,7 @@ function parseStoredParcel(value: unknown): SavedParcel | null {
     overlayLabels: asStringArray(item.overlayLabels),
     permitCount: Number.isFinite(Number(item.permitCount)) ? Number(item.permitCount) : 0,
     savedAt: item.savedAt ? new Date(item.savedAt).toISOString() : new Date().toISOString(),
-    source: item.source === "sample" ? "sample" : "geocode",
+    source: asParcelSource(item.source),
   };
 }
 
@@ -72,7 +77,7 @@ function normalizeInput(input: unknown): SavedParcel {
     overlayLabels: asStringArray(item.overlayLabels),
     permitCount: Number.isFinite(Number(item.permitCount)) ? Number(item.permitCount) : 0,
     savedAt: new Date().toISOString(),
-    source: item.source === "sample" ? "sample" : "geocode",
+    source: asParcelSource(item.source),
   };
 }
 
