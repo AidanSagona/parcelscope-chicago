@@ -13,6 +13,25 @@ const ChicagoMap = dynamic(() => import("./ChicagoMap"), {
   loading: () => <div className="map-loading">Loading Chicago map...</div>,
 });
 
+const WATCHLIST_STORAGE_KEY = "parcelscope.watchlist.v1";
+
+type SavedParcel = {
+  id: string;
+  title: string;
+  coordinates: [number, number];
+  pin: string;
+  rawPin?: string;
+  ward?: string;
+  municipality?: string;
+  community: string;
+  lotArea: string;
+  zoningClass: string;
+  overlayLabels: string[];
+  permitCount: number;
+  savedAt: string;
+  source: Parcel["source"];
+};
+
 function matchParcel(query: string): Parcel | undefined {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return parcels[0];
@@ -44,7 +63,12 @@ function parcelFromGeocode(result: GeocodeResult, query: string): Parcel {
   };
 }
 
-function buildMemo(parcel: Parcel, liveZoning?: LiveZoning, liveParcel?: LiveParcel) {
+function buildMemo(
+  parcel: Parcel,
+  liveZoning?: LiveZoning,
+  liveParcel?: LiveParcel,
+  livePermits: LivePermit[] = [],
+) {
   const activitySummary = parcel.activity
     .map((item) => `- ${item.type}: ${item.title} (${item.date}, ${item.distance})`)
     .join("\n");
@@ -54,6 +78,17 @@ function buildMemo(parcel: Parcel, liveZoning?: LiveZoning, liveParcel?: LivePar
   const lotArea = liveParcel?.lotArea || parcel.lotArea;
   const overlaySummary =
     liveZoning?.overlays.length ? liveZoning.overlays.map((overlay) => overlay.label).join(", ") : "None loaded";
+  const permitSummary = livePermits.length
+    ? livePermits
+        .slice(0, 5)
+        .map(
+          (permit) =>
+            `- ${permit.type}: ${permit.address || permit.permitNumber} (${
+              permit.issueDate?.slice(0, 10) || "unknown date"
+            })`,
+        )
+        .join("\n")
+    : "- No live permits found within the current 1,200 ft radius.";
 
   return `${parcel.title}
 
@@ -61,7 +96,10 @@ First-pass summary:
 The selected parcel is identified as PIN ${pin} in Ward ${ward}, ${parcel.community}. Lot area is ${lotArea}. The current zoning snapshot is ${zoningClass}. Applicable live overlay flags: ${overlaySummary}.
 
 Nearby approval and permit signals:
-${activitySummary}
+${activitySummary || "- No sample approval activity loaded for this address."}
+
+Live permit feed:
+${permitSummary}
 
 Manual verification checklist:
 - Confirm current zoning and overlays against the City Zoning_update service.
@@ -71,10 +109,81 @@ Manual verification checklist:
 This draft is an informational triage memo, not a legal zoning opinion.`;
 }
 
+function getWatchlistKey(parcel: Parcel, liveParcel?: LiveParcel) {
+  return liveParcel?.rawPin ? `pin:${liveParcel.rawPin}` : parcel.id;
+}
+
+function readStoredWatchlist() {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(WATCHLIST_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? (parsed as SavedParcel[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function savedParcelFromCurrent(
+  parcel: Parcel,
+  liveParcel: LiveParcel | undefined,
+  liveZoning: LiveZoning | undefined,
+  livePermits: LivePermit[],
+): SavedParcel {
+  return {
+    id: getWatchlistKey(parcel, liveParcel),
+    title: parcel.title,
+    coordinates: parcel.coordinates,
+    pin: liveParcel?.pin || parcel.pin,
+    rawPin: liveParcel?.rawPin,
+    ward: liveParcel?.ward || parcel.ward,
+    municipality: liveParcel?.municipality,
+    community: parcel.community,
+    lotArea: liveParcel?.lotArea || parcel.lotArea,
+    zoningClass: liveZoning?.zoningClass || parcel.zoning,
+    overlayLabels: liveZoning?.overlays.length
+      ? liveZoning.overlays.map((overlay) => overlay.label)
+      : parcel.badges,
+    permitCount: livePermits.length,
+    savedAt: new Date().toISOString(),
+    source: parcel.source,
+  };
+}
+
+function parcelFromSaved(item: SavedParcel): Parcel {
+  return {
+    id: item.id,
+    title: item.title,
+    pin: item.pin,
+    aliases: [item.title, item.pin, item.rawPin || ""].filter(Boolean),
+    ward: item.ward || "Unavailable",
+    community: item.municipality || item.community,
+    lotArea: item.lotArea,
+    zoning: item.zoningClass,
+    zoningSummary: "Saved parcel. Live parcel, zoning, and permit feeds refresh when opened.",
+    badges: item.overlayLabels.length ? item.overlayLabels : ["Saved parcel"],
+    activity: [],
+    coordinates: item.coordinates,
+    source: item.source,
+  };
+}
+
+function formatSavedDate(value: string) {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
 export default function ParcelApp() {
   const [selectedParcel, setSelectedParcel] = useState<Parcel | undefined>(parcels[0]);
   const [query, setQuery] = useState("");
-  const [savedIds, setSavedIds] = useState<Set<string>>(new Set());
+  const [savedParcels, setSavedParcels] = useState<SavedParcel[]>([]);
+  const [watchlistReady, setWatchlistReady] = useState(false);
   const [memo, setMemo] = useState("");
   const [livePermits, setLivePermits] = useState<LivePermit[]>([]);
   const [permitError, setPermitError] = useState("");
@@ -85,9 +194,17 @@ export default function ParcelApp() {
   const [searchError, setSearchError] = useState("");
   const [isSearching, setIsSearching] = useState(false);
 
+  const selectedWatchlistKey = useMemo(
+    () => (selectedParcel ? getWatchlistKey(selectedParcel, liveParcel) : undefined),
+    [liveParcel, selectedParcel],
+  );
+
   const isSaved = useMemo(
-    () => (selectedParcel ? savedIds.has(selectedParcel.id) : false),
-    [savedIds, selectedParcel],
+    () =>
+      selectedWatchlistKey
+        ? savedParcels.some((savedParcel) => savedParcel.id === selectedWatchlistKey)
+        : false,
+    [savedParcels, selectedWatchlistKey],
   );
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
@@ -151,11 +268,48 @@ export default function ParcelApp() {
 
   function toggleSaved() {
     if (!selectedParcel) return;
-    const nextSaved = new Set(savedIds);
-    if (nextSaved.has(selectedParcel.id)) nextSaved.delete(selectedParcel.id);
-    else nextSaved.add(selectedParcel.id);
-    setSavedIds(nextSaved);
+    const current = savedParcelFromCurrent(selectedParcel, liveParcel, liveZoning, livePermits);
+
+    setSavedParcels((previous) => {
+      if (previous.some((savedParcel) => savedParcel.id === current.id)) {
+        return previous.filter((savedParcel) => savedParcel.id !== current.id);
+      }
+
+      return [current, ...previous].slice(0, 30);
+    });
   }
+
+  function removeSaved(id: string) {
+    setSavedParcels((previous) => previous.filter((savedParcel) => savedParcel.id !== id));
+  }
+
+  function openSaved(item: SavedParcel) {
+    const parcel = parcelFromSaved(item);
+    setSelectedParcel(parcel);
+    setQuery(item.title);
+    setLivePermits([]);
+    setLiveZoning(undefined);
+    setLiveParcel(undefined);
+    setPermitError("");
+    setZoningError("");
+    setParcelError("");
+    setSearchError("");
+    setMemo("");
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSavedParcels(readStoredWatchlist());
+      setWatchlistReady(true);
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!watchlistReady) return;
+    window.localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(savedParcels));
+  }, [savedParcels, watchlistReady]);
 
   useEffect(() => {
     if (!selectedParcel) return;
@@ -287,6 +441,46 @@ export default function ParcelApp() {
           <>
             {searchError ? <p className="error-text">{searchError}</p> : null}
             {isSearching ? <p className="muted">Looking up Chicago address...</p> : null}
+            <section className="card watchlist-card">
+              <div className="section-line">
+                <h3>Watchlist</h3>
+                <span>{savedParcels.length} saved</span>
+              </div>
+              {savedParcels.length === 0 ? (
+                <p className="muted">
+                  Save parcels you want to revisit. The list stays on this browser until a database
+                  is connected.
+                </p>
+              ) : (
+                <ol className="watchlist-list">
+                  {savedParcels.map((savedParcel) => (
+                    <li key={savedParcel.id}>
+                      <button
+                        className="watchlist-item"
+                        type="button"
+                        onClick={() => openSaved(savedParcel)}
+                      >
+                        <strong>{savedParcel.title}</strong>
+                        <span>
+                          {savedParcel.pin} - {savedParcel.zoningClass} - {savedParcel.lotArea}
+                        </span>
+                        <small>
+                          {savedParcel.permitCount} permits nearby - saved{" "}
+                          {formatSavedDate(savedParcel.savedAt)}
+                        </small>
+                      </button>
+                      <button
+                        className="text-button danger"
+                        type="button"
+                        onClick={() => removeSaved(savedParcel.id)}
+                      >
+                        Remove
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
             <section className="card">
               <div className="section-line">
                 <h3>Parcel Facts</h3>
@@ -422,7 +616,9 @@ export default function ParcelApp() {
                 <h3>Site Memo Draft</h3>
                 <button
                   type="button"
-                  onClick={() => setMemo(buildMemo(selectedParcel, liveZoning, liveParcel))}
+                  onClick={() =>
+                    setMemo(buildMemo(selectedParcel, liveZoning, liveParcel, livePermits))
+                  }
                 >
                   Generate
                 </button>
