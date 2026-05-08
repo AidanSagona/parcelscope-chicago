@@ -91,7 +91,7 @@ h1 {
 
 .search {
   display: flex;
-  width: min(540px, 58vw);
+  width: min(500px, 44vw);
   border: 1px solid var(--line);
   background: #fff;
 }
@@ -115,7 +115,8 @@ h1 {
   cursor: pointer;
 }
 
-.search button:disabled {
+.search button:disabled,
+.icon-button:disabled {
   cursor: wait;
   opacity: 0.72;
 }
@@ -130,6 +131,26 @@ h1 {
 
 .text-button.danger {
   color: #9a2f22;
+}
+
+.auth-actions,
+.auth-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  white-space: nowrap;
+}
+
+.auth-inline {
+  margin-top: 10px;
+}
+
+.auth-page {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background: var(--paper);
+  padding: 24px;
 }
 
 .map-stage {
@@ -598,6 +619,10 @@ dd {
 
   .search {
     width: 100%;
+  }
+
+  .auth-actions {
+    justify-content: flex-end;
   }
 
   .detail-pane {

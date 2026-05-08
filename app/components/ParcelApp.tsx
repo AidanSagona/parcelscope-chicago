@@ -1,36 +1,19 @@
 "use client";
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { SignInButton, SignUpButton, UserButton, useUser } from "@clerk/nextjs";
 import dynamic from "next/dynamic";
 import { GeocodeResult } from "../data/geocode";
 import { LiveParcel } from "../data/liveParcel";
 import { Parcel, parcels, sourceLinks } from "../data/sampleParcels";
 import { LivePermit } from "../data/livePermits";
 import { LiveZoning } from "../data/liveZoning";
+import { SavedParcel } from "../data/watchlist";
 
 const ChicagoMap = dynamic(() => import("./ChicagoMap"), {
   ssr: false,
   loading: () => <div className="map-loading">Loading Chicago map...</div>,
 });
-
-const WATCHLIST_STORAGE_KEY = "parcelscope.watchlist.v1";
-
-type SavedParcel = {
-  id: string;
-  title: string;
-  coordinates: [number, number];
-  pin: string;
-  rawPin?: string;
-  ward?: string;
-  municipality?: string;
-  community: string;
-  lotArea: string;
-  zoningClass: string;
-  overlayLabels: string[];
-  permitCount: number;
-  savedAt: string;
-  source: Parcel["source"];
-};
 
 function matchParcel(query: string): Parcel | undefined {
   const normalized = query.trim().toLowerCase();
@@ -113,19 +96,6 @@ function getWatchlistKey(parcel: Parcel, liveParcel?: LiveParcel) {
   return liveParcel?.rawPin ? `pin:${liveParcel.rawPin}` : parcel.id;
 }
 
-function readStoredWatchlist() {
-  if (typeof window === "undefined") return [];
-
-  try {
-    const raw = window.localStorage.getItem(WATCHLIST_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? (parsed as SavedParcel[]) : [];
-  } catch {
-    return [];
-  }
-}
-
 function savedParcelFromCurrent(
   parcel: Parcel,
   liveParcel: LiveParcel | undefined,
@@ -180,10 +150,13 @@ function formatSavedDate(value: string) {
 }
 
 export default function ParcelApp() {
+  const { isLoaded: isAuthLoaded, isSignedIn } = useUser();
   const [selectedParcel, setSelectedParcel] = useState<Parcel | undefined>(parcels[0]);
   const [query, setQuery] = useState("");
   const [savedParcels, setSavedParcels] = useState<SavedParcel[]>([]);
   const [watchlistReady, setWatchlistReady] = useState(false);
+  const [watchlistError, setWatchlistError] = useState("");
+  const [isSavingParcel, setIsSavingParcel] = useState(false);
   const [memo, setMemo] = useState("");
   const [livePermits, setLivePermits] = useState<LivePermit[]>([]);
   const [permitError, setPermitError] = useState("");
@@ -266,21 +239,60 @@ export default function ParcelApp() {
     setMemo("");
   }, []);
 
-  function toggleSaved() {
+  async function toggleSaved() {
     if (!selectedParcel) return;
-    const current = savedParcelFromCurrent(selectedParcel, liveParcel, liveZoning, livePermits);
+    if (!isSignedIn) {
+      setWatchlistError("Sign in to save parcels to your account.");
+      return;
+    }
 
-    setSavedParcels((previous) => {
-      if (previous.some((savedParcel) => savedParcel.id === current.id)) {
-        return previous.filter((savedParcel) => savedParcel.id !== current.id);
+    const current = savedParcelFromCurrent(selectedParcel, liveParcel, liveZoning, livePermits);
+    setIsSavingParcel(true);
+    setWatchlistError("");
+
+    try {
+      if (savedParcels.some((savedParcel) => savedParcel.id === current.id)) {
+        const response = await fetch(`/api/watchlist?id=${encodeURIComponent(current.id)}`, {
+          method: "DELETE",
+        });
+        if (!response.ok) throw new Error("Unable to remove parcel.");
+        setSavedParcels((previous) =>
+          previous.filter((savedParcel) => savedParcel.id !== current.id),
+        );
+        return;
       }
 
-      return [current, ...previous].slice(0, 30);
-    });
+      const response = await fetch("/api/watchlist", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(current),
+      });
+      if (!response.ok) throw new Error("Unable to save parcel.");
+      const data = (await response.json()) as { item: SavedParcel };
+      setSavedParcels((previous) => [
+        data.item,
+        ...previous.filter((savedParcel) => savedParcel.id !== data.item.id),
+      ]);
+    } catch {
+      setWatchlistError("Account watchlist update failed. Try again.");
+    } finally {
+      setIsSavingParcel(false);
+    }
   }
 
-  function removeSaved(id: string) {
-    setSavedParcels((previous) => previous.filter((savedParcel) => savedParcel.id !== id));
+  async function removeSaved(id: string) {
+    if (!isSignedIn) return;
+    setWatchlistError("");
+
+    try {
+      const response = await fetch(`/api/watchlist?id=${encodeURIComponent(id)}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) throw new Error("Unable to remove parcel.");
+      setSavedParcels((previous) => previous.filter((savedParcel) => savedParcel.id !== id));
+    } catch {
+      setWatchlistError("Could not remove that saved parcel.");
+    }
   }
 
   function openSaved(item: SavedParcel) {
@@ -298,18 +310,41 @@ export default function ParcelApp() {
   }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => {
-      setSavedParcels(readStoredWatchlist());
-      setWatchlistReady(true);
+    if (!isAuthLoaded) return;
+
+    if (!isSignedIn) {
+      const timer = window.setTimeout(() => {
+        setSavedParcels([]);
+        setWatchlistReady(true);
+      }, 0);
+      return () => window.clearTimeout(timer);
+    }
+
+    const controller = new AbortController();
+    const loadingTimer = window.setTimeout(() => {
+      setWatchlistReady(false);
+      setWatchlistError("");
     }, 0);
 
-    return () => window.clearTimeout(timer);
-  }, []);
+    fetch("/api/watchlist", { signal: controller.signal })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unable to load watchlist.");
+        return response.json() as Promise<{ items: SavedParcel[] }>;
+      })
+      .then((data) => setSavedParcels(data.items))
+      .catch((error: Error) => {
+        if (error.name !== "AbortError") {
+          setSavedParcels([]);
+          setWatchlistError("Could not load your account watchlist.");
+        }
+      })
+      .finally(() => setWatchlistReady(true));
 
-  useEffect(() => {
-    if (!watchlistReady) return;
-    window.localStorage.setItem(WATCHLIST_STORAGE_KEY, JSON.stringify(savedParcels));
-  }, [savedParcels, watchlistReady]);
+    return () => {
+      window.clearTimeout(loadingTimer);
+      controller.abort();
+    };
+  }, [isAuthLoaded, isSignedIn]);
 
   useEffect(() => {
     if (!selectedParcel) return;
@@ -410,6 +445,24 @@ export default function ParcelApp() {
               {isSearching ? "Searching" : "Search"}
             </button>
           </form>
+          <div className="auth-actions">
+            {!isSignedIn ? (
+              <>
+              <SignInButton mode="modal">
+                <button className="text-button" type="button">
+                  Sign in
+                </button>
+              </SignInButton>
+              <SignUpButton mode="modal">
+                <button className="icon-button" type="button">
+                  Sign up
+                </button>
+              </SignUpButton>
+              </>
+            ) : (
+              <UserButton />
+            )}
+          </div>
         </header>
 
         <ChicagoMap
@@ -427,9 +480,16 @@ export default function ParcelApp() {
             <h2>{selectedParcel?.title ?? "No parcel found"}</h2>
           </div>
           {selectedParcel ? (
-            <button className="icon-button" type="button" onClick={toggleSaved}>
-              {isSaved ? "Saved" : "Save"}
-            </button>
+            isSignedIn ? (
+              <button
+                className="icon-button"
+                type="button"
+                onClick={toggleSaved}
+                disabled={isSavingParcel}
+              >
+                {isSavingParcel ? "Saving" : isSaved ? "Saved" : "Save"}
+              </button>
+            ) : null
           ) : null}
         </div>
 
@@ -444,41 +504,63 @@ export default function ParcelApp() {
             <section className="card watchlist-card">
               <div className="section-line">
                 <h3>Watchlist</h3>
-                <span>{savedParcels.length} saved</span>
+                <span>{isSignedIn ? `${savedParcels.length} saved` : "Account required"}</span>
               </div>
-              {savedParcels.length === 0 ? (
-                <p className="muted">
-                  Save parcels you want to revisit. The list stays on this browser until a database
-                  is connected.
-                </p>
+              {watchlistError ? <p className="error-text">{watchlistError}</p> : null}
+              {!isSignedIn ? (
+                <>
+                  <p className="muted">
+                    Sign in to save parcels to a real database-backed account watchlist.
+                  </p>
+                  <div className="auth-inline">
+                    <SignInButton mode="modal">
+                      <button className="icon-button" type="button">
+                        Sign in
+                      </button>
+                    </SignInButton>
+                    <SignUpButton mode="modal">
+                      <button className="text-button" type="button">
+                        Create account
+                      </button>
+                    </SignUpButton>
+                  </div>
+                </>
               ) : (
-                <ol className="watchlist-list">
-                  {savedParcels.map((savedParcel) => (
-                    <li key={savedParcel.id}>
-                      <button
-                        className="watchlist-item"
-                        type="button"
-                        onClick={() => openSaved(savedParcel)}
-                      >
-                        <strong>{savedParcel.title}</strong>
-                        <span>
-                          {savedParcel.pin} - {savedParcel.zoningClass} - {savedParcel.lotArea}
-                        </span>
-                        <small>
-                          {savedParcel.permitCount} permits nearby - saved{" "}
-                          {formatSavedDate(savedParcel.savedAt)}
-                        </small>
-                      </button>
-                      <button
-                        className="text-button danger"
-                        type="button"
-                        onClick={() => removeSaved(savedParcel.id)}
-                      >
-                        Remove
-                      </button>
-                    </li>
-                  ))}
-                </ol>
+                <>
+                {!watchlistReady ? <p className="muted">Loading saved parcels...</p> : null}
+                {watchlistReady && savedParcels.length === 0 ? (
+                  <p className="muted">Save parcels you want to revisit from any signed-in session.</p>
+                ) : null}
+                {savedParcels.length > 0 ? (
+                  <ol className="watchlist-list">
+                    {savedParcels.map((savedParcel) => (
+                      <li key={savedParcel.id}>
+                        <button
+                          className="watchlist-item"
+                          type="button"
+                          onClick={() => openSaved(savedParcel)}
+                        >
+                          <strong>{savedParcel.title}</strong>
+                          <span>
+                            {savedParcel.pin} - {savedParcel.zoningClass} - {savedParcel.lotArea}
+                          </span>
+                          <small>
+                            {savedParcel.permitCount} permits nearby - saved{" "}
+                            {formatSavedDate(savedParcel.savedAt)}
+                          </small>
+                        </button>
+                        <button
+                          className="text-button danger"
+                          type="button"
+                          onClick={() => removeSaved(savedParcel.id)}
+                        >
+                          Remove
+                        </button>
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
+                </>
               )}
             </section>
             <section className="card">
