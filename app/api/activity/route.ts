@@ -283,6 +283,8 @@ async function queryArcGisLayer(layerId: number, bbox: Bbox, outFields: string, 
     outFields,
     returnGeometry: "true",
     outSR: "4326",
+    geometryPrecision: "6",
+    maxAllowableOffset: "0.00001",
     resultRecordCount: String(limit),
   });
 
@@ -398,17 +400,24 @@ export async function GET(request: Request) {
       features: events.map(eventToFeature),
     };
 
-    return NextResponse.json({
-      events,
-      geojson,
-      count: events.length,
-      source: {
-        permits: PERMITS_SOURCE_URL,
-        demolitions: DEMO_SOURCE_URL,
-        zba: ZBA_SOURCE_URL,
-        plannedDevelopments: PD_SOURCE_URL,
+    return NextResponse.json(
+      {
+        events,
+        geojson,
+        count: events.length,
+        source: {
+          permits: PERMITS_SOURCE_URL,
+          demolitions: DEMO_SOURCE_URL,
+          zba: ZBA_SOURCE_URL,
+          plannedDevelopments: PD_SOURCE_URL,
+        },
       },
-    });
+      {
+        headers: {
+          "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400",
+        },
+      },
+    );
   } catch {
     return NextResponse.json({ error: "Activity feed unavailable." }, { status: 500 });
   }

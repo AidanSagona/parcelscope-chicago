@@ -3,7 +3,13 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { SignInButton, SignUpButton, UserButton, useUser } from "@clerk/nextjs";
 import dynamic from "next/dynamic";
-import { ActivityEvent } from "../data/activityEvents";
+import {
+  ACTIVITY_KIND_LABELS,
+  ACTIVITY_KIND_ORDER,
+  getDefaultActivityFilters,
+  type ActivityEvent,
+  type ActivityEventKind,
+} from "../data/activityEvents";
 import { GeocodeResult } from "../data/geocode";
 import { LiveParcel } from "../data/liveParcel";
 import { Parcel, parcels, sourceLinks } from "../data/sampleParcels";
@@ -15,6 +21,12 @@ const ChicagoMap = dynamic(() => import("./ChicagoMap"), {
   ssr: false,
   loading: () => <div className="map-loading">Loading Chicago map...</div>,
 });
+
+const ACTIVITY_RADIUS_OPTIONS = [
+  { label: "500 ft", value: 500 },
+  { label: "1,200 ft", value: 1200 },
+  { label: "0.5 mi", value: 2640 },
+];
 
 function matchParcel(query: string): Parcel | undefined {
   const normalized = query.trim().toLowerCase();
@@ -94,6 +106,7 @@ function buildMemo(
   liveParcel?: LiveParcel,
   livePermits: LivePermit[] = [],
   activityEvents: ActivityEvent[] = [],
+  activityRadiusFeet = 1200,
 ) {
   const zoningClass = liveZoning?.zoningClass || parcel.zoning;
   const pin = liveParcel?.pin || parcel.pin;
@@ -111,7 +124,7 @@ function buildMemo(
             })`,
         )
         .join("\n")
-    : "- No live permits found within the current 1,200 ft radius.";
+    : `- No live permits found within the current ${formatActivityRadius(activityRadiusFeet)} radius.`;
   const eventSummary = activityEvents.length
     ? activityEvents
         .slice(0, 8)
@@ -205,11 +218,28 @@ function formatDistance(value?: number) {
   return `${Math.round(value as number).toLocaleString()} ft`;
 }
 
+function formatActivityRadius(value: number) {
+  if (value >= 2640) {
+    return `${(value / 5280).toLocaleString("en-US", { maximumFractionDigits: 1 })} mi`;
+  }
+
+  return `${value.toLocaleString()} ft`;
+}
+
 function formatActivityKind(event: ActivityEvent) {
   if (event.kind === "planned-development") return "Planned Development";
   if (event.kind === "zba") return "ZBA";
   if (event.kind === "demo") return "Demo";
   return "Permit";
+}
+
+function emptyActivityCounts(): Record<ActivityEventKind, number> {
+  return {
+    permit: 0,
+    demo: 0,
+    zba: 0,
+    "planned-development": 0,
+  };
 }
 
 export default function ParcelApp() {
@@ -225,6 +255,8 @@ export default function ParcelApp() {
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
   const [activityError, setActivityError] = useState("");
   const [selectedActivityEvent, setSelectedActivityEvent] = useState<ActivityEvent | undefined>();
+  const [activityFilters, setActivityFilters] = useState(getDefaultActivityFilters);
+  const [activityRadiusFeet, setActivityRadiusFeet] = useState(1200);
   const [permitError, setPermitError] = useState("");
   const [liveZoning, setLiveZoning] = useState<LiveZoning | undefined>();
   const [zoningError, setZoningError] = useState("");
@@ -245,6 +277,47 @@ export default function ParcelApp() {
         : false,
     [savedParcels, selectedWatchlistKey],
   );
+
+  const filteredActivityEvents = useMemo(
+    () => activityEvents.filter((event) => activityFilters[event.kind]),
+    [activityEvents, activityFilters],
+  );
+
+  const activityCounts = useMemo(() => {
+    const counts = emptyActivityCounts();
+    for (const event of activityEvents) {
+      counts[event.kind] += 1;
+    }
+    return counts;
+  }, [activityEvents]);
+
+  const activeActivityFilterCount = useMemo(
+    () => ACTIVITY_KIND_ORDER.filter((kind) => activityFilters[kind]).length,
+    [activityFilters],
+  );
+
+  const visibleSelectedActivityEvent =
+    selectedActivityEvent && activityFilters[selectedActivityEvent.kind]
+      ? selectedActivityEvent
+      : undefined;
+
+  function toggleActivityFilter(kind: ActivityEventKind) {
+    setActivityFilters((previous) => ({
+      ...previous,
+      [kind]: !previous[kind],
+    }));
+    setSelectedActivityEvent(undefined);
+  }
+
+  function chooseActivityRadius(radiusFeet: number) {
+    setActivityRadiusFeet(radiusFeet);
+    setLivePermits([]);
+    setActivityEvents([]);
+    setSelectedActivityEvent(undefined);
+    setActivityError("");
+    setPermitError("");
+    setMemo("");
+  }
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -444,7 +517,7 @@ export default function ParcelApp() {
     const controller = new AbortController();
     const [lng, lat] = selectedParcel.coordinates;
 
-    fetch(`/api/permits?lat=${lat}&lng=${lng}&radiusFeet=1200&limit=8`, {
+    fetch(`/api/permits?lat=${lat}&lng=${lng}&radiusFeet=${activityRadiusFeet}&limit=8`, {
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -461,7 +534,7 @@ export default function ParcelApp() {
       .catch(() => undefined);
 
     return () => controller.abort();
-  }, [selectedParcel]);
+  }, [activityRadiusFeet, selectedParcel]);
 
   useEffect(() => {
     if (!selectedParcel) return;
@@ -469,7 +542,7 @@ export default function ParcelApp() {
     const controller = new AbortController();
     const [lng, lat] = selectedParcel.coordinates;
 
-    fetch(`/api/activity?lat=${lat}&lng=${lng}&radiusFeet=1200&limit=30`, {
+    fetch(`/api/activity?lat=${lat}&lng=${lng}&radiusFeet=${activityRadiusFeet}&limit=50`, {
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -486,7 +559,7 @@ export default function ParcelApp() {
       .catch(() => undefined);
 
     return () => controller.abort();
-  }, [selectedParcel]);
+  }, [activityRadiusFeet, selectedParcel]);
 
   useEffect(() => {
     if (!selectedParcel) return;
@@ -585,6 +658,7 @@ export default function ParcelApp() {
         <ChicagoMap
           selectedParcel={selectedParcel}
           liveParcel={liveParcel}
+          activityFilters={activityFilters}
           onSelectParcel={selectParcel}
           onSelectActivity={setSelectedActivityEvent}
         />
@@ -765,34 +839,77 @@ export default function ParcelApp() {
 
             <section className="card">
               <div className="section-line">
-                <h3>Approval Activity</h3>
-                <span>{activityEvents.length} nearby</span>
+                <h3>Nearby Activity</h3>
+                <span>
+                  {filteredActivityEvents.length} shown / {activityEvents.length} loaded
+                </span>
               </div>
-              {selectedActivityEvent ? (
+              <div className="activity-controls">
+                <div className="filter-row" aria-label="Activity filters">
+                  {ACTIVITY_KIND_ORDER.map((kind) => (
+                    <button
+                      key={kind}
+                      className={`filter-chip event-filter-${kind}${
+                        activityFilters[kind] ? " active" : ""
+                      }`}
+                      type="button"
+                      aria-pressed={activityFilters[kind]}
+                      onClick={() => toggleActivityFilter(kind)}
+                    >
+                      {ACTIVITY_KIND_LABELS[kind]}
+                      <span>{activityCounts[kind]}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="radius-row" aria-label="Activity search radius">
+                  {ACTIVITY_RADIUS_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      className={activityRadiusFeet === option.value ? "active" : ""}
+                      type="button"
+                      aria-pressed={activityRadiusFeet === option.value}
+                      onClick={() => chooseActivityRadius(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {visibleSelectedActivityEvent ? (
                 <div className="selected-activity">
-                  <span className={`event-kind event-kind-${selectedActivityEvent.kind}`}>
-                    {formatActivityKind(selectedActivityEvent)}
+                  <span className={`event-kind event-kind-${visibleSelectedActivityEvent.kind}`}>
+                    {formatActivityKind(visibleSelectedActivityEvent)}
                   </span>
-                  <strong>{selectedActivityEvent.title}</strong>
-                  {selectedActivityEvent.address ? <p>{selectedActivityEvent.address}</p> : null}
-                  {selectedActivityEvent.description ? (
-                    <p className="muted">{selectedActivityEvent.description}</p>
+                  <strong>{visibleSelectedActivityEvent.title}</strong>
+                  <span className="muted">
+                    {[visibleSelectedActivityEvent.date, formatDistance(visibleSelectedActivityEvent.distanceFeet)]
+                      .filter(Boolean)
+                      .join(" - ")}
+                  </span>
+                  {visibleSelectedActivityEvent.address ? (
+                    <p>{visibleSelectedActivityEvent.address}</p>
                   ) : null}
-                  <a href={selectedActivityEvent.sourceUrl} target="_blank" rel="noreferrer">
-                    Source: {selectedActivityEvent.sourceName}
+                  {visibleSelectedActivityEvent.description ? (
+                    <p className="muted">{visibleSelectedActivityEvent.description}</p>
+                  ) : null}
+                  <a href={visibleSelectedActivityEvent.sourceUrl} target="_blank" rel="noreferrer">
+                    Source: {visibleSelectedActivityEvent.sourceName}
                   </a>
                 </div>
               ) : null}
               {activityError ? <p className="error-text">{activityError}</p> : null}
-              {!activityError && activityEvents.length === 0 ? (
+              {!activityError && filteredActivityEvents.length === 0 ? (
                 <p className="muted">
-                  No approvals, demolitions, or planned-development activity loaded within 1,200
-                  feet.
+                  {activeActivityFilterCount === 0
+                    ? "All activity filters are off."
+                    : `No matching activity loaded within ${formatActivityRadius(
+                        activityRadiusFeet,
+                      )}.`}
                 </p>
               ) : null}
               <ol className="activity-list">
-                {activityEvents.slice(0, 12).map((event) => (
-                  <li key={event.id}>
+                {filteredActivityEvents.slice(0, 12).map((event) => (
+                  <li key={event.id} className={`activity-item activity-item-${event.kind}`}>
                     <strong>
                       {formatActivityKind(event)}: {event.title}
                     </strong>
@@ -819,7 +936,9 @@ export default function ParcelApp() {
               </div>
               {permitError ? <p className="error-text">{permitError}</p> : null}
               {!permitError && livePermits.length === 0 ? (
-                <p className="muted">No permits loaded yet or none found within 1,200 feet.</p>
+                <p className="muted">
+                  No permits loaded yet or none found within {formatActivityRadius(activityRadiusFeet)}.
+                </p>
               ) : null}
               <ol className="activity-list">
                 {livePermits.map((permit) => (
@@ -852,7 +971,8 @@ export default function ParcelApp() {
                         liveZoning,
                         liveParcel,
                         livePermits,
-                        activityEvents,
+                        filteredActivityEvents,
+                        activityRadiusFeet,
                       ),
                     )
                   }

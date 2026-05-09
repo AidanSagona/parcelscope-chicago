@@ -173,6 +173,7 @@ export async function GET(request: Request) {
     outFields: "OBJECTID,Name,PIN10,Ward,MUNICIPALITY,PARCELTYPE,Shape_Area",
     returnGeometry: "true",
     outSR: "4326",
+    geometryPrecision: "6",
     resultRecordCount: String(limit),
   });
 
@@ -202,6 +203,10 @@ export async function GET(request: Request) {
       parcels,
       count: parcels.features.length,
       exceededTransferLimit: Boolean(data.exceededTransferLimit),
+    }, {
+      headers: {
+        "Cache-Control": "public, s-maxage=86400, stale-while-revalidate=604800",
+      },
     });
   } catch {
     return NextResponse.json({ error: "Cook County parcel map feed unavailable." }, { status: 500 });

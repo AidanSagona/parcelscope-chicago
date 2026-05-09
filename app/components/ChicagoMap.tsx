@@ -11,6 +11,7 @@ import maplibregl, {
 import type { Feature, FeatureCollection, Polygon } from "geojson";
 import type {
   ActivityEvent,
+  ActivityFilterState,
   ActivityEventFeatureCollection,
   ActivityEventProperties,
 } from "../data/activityEvents";
@@ -21,6 +22,7 @@ import type { Parcel } from "../data/sampleParcels";
 type ChicagoMapProps = {
   selectedParcel?: Parcel;
   liveParcel?: LiveParcel;
+  activityFilters: ActivityFilterState;
   onSelectParcel: (parcel: Parcel) => void;
   onSelectActivity: (event: ActivityEvent) => void;
 };
@@ -98,6 +100,39 @@ function selectedParcelFilter(selectedParcel?: Parcel) {
   return ["==", ["get", "id"], selectedParcel?.id || ""] as FilterSpecification;
 }
 
+function activityLayerFilter(activityFilters: ActivityFilterState) {
+  const enabledKinds = Object.entries(activityFilters)
+    .filter(([, isEnabled]) => isEnabled)
+    .map(([kind]) => kind);
+
+  if (enabledKinds.length === 0) {
+    return ["==", ["get", "kind"], "__none__"] as FilterSpecification;
+  }
+
+  return ["match", ["get", "kind"], enabledKinds, true, false] as FilterSpecification;
+}
+
+function trimCache<T>(cache: Map<string, T>, maxEntries = 12) {
+  if (cache.size <= maxEntries) return;
+  const oldestKey = cache.keys().next().value as string | undefined;
+  if (oldestKey) cache.delete(oldestKey);
+}
+
+function parcelStatusFromResponse(data: ParcelMapResponse) {
+  if (data.needsZoom) return "Zoom in closer to load individual parcels.";
+  if (data.count === 0) return "No parcels returned for this view.";
+  if (data.exceededTransferLimit) {
+    return `${data.count.toLocaleString()} parcels loaded. Zoom in for more detail.`;
+  }
+  return `${data.count.toLocaleString()} live Cook County parcels loaded.`;
+}
+
+function activityStatusFromResponse(data: ActivityMapResponse) {
+  if (data.needsZoom) return "Zoom in closer to load approval and permit activity.";
+  if (data.count === 0) return "No activity signals returned for this view.";
+  return `${data.count.toLocaleString()} approval, permit, and demo signals loaded.`;
+}
+
 function mapFeatureToParcel(feature: MapGeoJSONFeature): Parcel | undefined {
   const properties = feature.properties as Partial<MapParcelProperties> | null;
   if (!properties?.id || !properties.pin || !properties.centerLng || !properties.centerLat) {
@@ -157,6 +192,7 @@ function mapFeatureToActivity(feature: MapGeoJSONFeature): ActivityEvent | undef
 export default function ChicagoMap({
   selectedParcel,
   liveParcel,
+  activityFilters,
   onSelectParcel,
   onSelectActivity,
 }: ChicagoMapProps) {
@@ -165,6 +201,7 @@ export default function ChicagoMap({
   const searchMarkerRef = useRef<Marker | null>(null);
   const initialCenterRef = useRef<[number, number]>(selectedParcel?.coordinates || [-87.6582, 41.8868]);
   const initialSelectedFilterRef = useRef(selectedParcelFilter(selectedParcel));
+  const initialActivityFilterRef = useRef(activityLayerFilter(activityFilters));
   const [parcelStatus, setParcelStatus] = useState("Loading parcel boundaries...");
   const [activityStatus, setActivityStatus] = useState("Loading approvals and activity...");
 
@@ -184,15 +221,24 @@ export default function ChicagoMap({
     let latestActivityRequestId = 0;
     let parcelController: AbortController | null = null;
     let activityController: AbortController | null = null;
+    const parcelCache = new Map<string, ParcelMapResponse>();
+    const activityCache = new Map<string, ActivityMapResponse>();
 
-    function currentBbox() {
+    function currentViewportKey() {
       const bounds = map.getBounds();
-      return [
-        bounds.getWest(),
-        bounds.getSouth(),
-        bounds.getEast(),
-        bounds.getNorth(),
+      const precision = 10000;
+      const bbox = [
+        Math.floor(bounds.getWest() * precision) / precision,
+        Math.floor(bounds.getSouth() * precision) / precision,
+        Math.ceil(bounds.getEast() * precision) / precision,
+        Math.ceil(bounds.getNorth() * precision) / precision,
       ].join(",");
+      const zoomBucket = Math.floor(map.getZoom() * 2) / 2;
+
+      return {
+        bbox,
+        key: `${zoomBucket}:${bbox}`,
+      };
     }
 
     async function loadViewportParcels() {
@@ -209,12 +255,20 @@ export default function ChicagoMap({
       const requestId = latestRequestId + 1;
       latestRequestId = requestId;
       parcelController?.abort();
+      const viewport = currentViewportKey();
+      const cached = parcelCache.get(viewport.key);
+      if (cached) {
+        source.setData(cached.parcels);
+        setParcelStatus(parcelStatusFromResponse(cached));
+        return;
+      }
+
       parcelController = new AbortController();
       setParcelStatus("Loading parcel boundaries...");
 
       try {
         const response = await fetch(
-          `/api/parcels?bbox=${encodeURIComponent(currentBbox())}&limit=350`,
+          `/api/parcels?bbox=${encodeURIComponent(viewport.bbox)}&limit=700`,
           {
             signal: parcelController.signal,
           },
@@ -225,16 +279,9 @@ export default function ChicagoMap({
         if (requestId !== latestRequestId) return;
 
         source.setData(data.parcels);
-
-        if (data.needsZoom) {
-          setParcelStatus("Zoom in closer to load individual parcels.");
-        } else if (data.count === 0) {
-          setParcelStatus("No parcels returned for this view.");
-        } else if (data.exceededTransferLimit) {
-          setParcelStatus(`${data.count.toLocaleString()} parcels loaded. Zoom in for more detail.`);
-        } else {
-          setParcelStatus(`${data.count.toLocaleString()} live Cook County parcels loaded.`);
-        }
+        parcelCache.set(viewport.key, data);
+        trimCache(parcelCache);
+        setParcelStatus(parcelStatusFromResponse(data));
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") return;
         if (requestId === latestRequestId) {
@@ -258,12 +305,20 @@ export default function ChicagoMap({
       const requestId = latestActivityRequestId + 1;
       latestActivityRequestId = requestId;
       activityController?.abort();
+      const viewport = currentViewportKey();
+      const cached = activityCache.get(viewport.key);
+      if (cached) {
+        source.setData(cached.geojson);
+        setActivityStatus(activityStatusFromResponse(cached));
+        return;
+      }
+
       activityController = new AbortController();
       setActivityStatus("Loading approvals and activity...");
 
       try {
         const response = await fetch(
-          `/api/activity?bbox=${encodeURIComponent(currentBbox())}&limit=120`,
+          `/api/activity?bbox=${encodeURIComponent(viewport.bbox)}&limit=120`,
           {
             signal: activityController.signal,
           },
@@ -274,14 +329,9 @@ export default function ChicagoMap({
         if (requestId !== latestActivityRequestId) return;
 
         source.setData(data.geojson);
-
-        if (data.needsZoom) {
-          setActivityStatus("Zoom in closer to load approval and permit activity.");
-        } else if (data.count === 0) {
-          setActivityStatus("No activity signals returned for this view.");
-        } else {
-          setActivityStatus(`${data.count.toLocaleString()} approval, permit, and demo signals loaded.`);
-        }
+        activityCache.set(viewport.key, data);
+        trimCache(activityCache);
+        setActivityStatus(activityStatusFromResponse(data));
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") return;
         if (requestId === latestActivityRequestId) {
@@ -352,6 +402,7 @@ export default function ChicagoMap({
         id: ACTIVITY_CIRCLE_LAYER_ID,
         type: "circle",
         source: ACTIVITY_SOURCE_ID,
+        filter: initialActivityFilterRef.current,
         paint: {
           "circle-color": [
             "match",
@@ -459,6 +510,12 @@ export default function ChicagoMap({
       });
     }
   }, [selectedParcel]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !map.getLayer(ACTIVITY_CIRCLE_LAYER_ID)) return;
+    map.setFilter(ACTIVITY_CIRCLE_LAYER_ID, activityLayerFilter(activityFilters));
+  }, [activityFilters]);
 
   useEffect(() => {
     const activeMap = mapRef.current;

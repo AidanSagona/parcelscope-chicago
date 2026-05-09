@@ -595,6 +595,60 @@ dd {
   list-style: none;
 }
 
+.activity-controls {
+  display: grid;
+  gap: 10px;
+  margin: 4px 0 14px;
+}
+
+.filter-row,
+.radius-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filter-chip,
+.radius-row button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  background: #f7faf8;
+  color: var(--muted);
+  padding: 7px 9px;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.filter-chip span {
+  min-width: 20px;
+  padding: 2px 5px;
+  background: #e6ece8;
+  color: var(--ink);
+  text-align: center;
+}
+
+.filter-chip.active,
+.radius-row button.active {
+  border-color: rgba(23, 32, 28, 0.18);
+  background: var(--ink);
+  color: #fff;
+}
+
+.filter-chip.active span {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.filter-chip:focus-visible,
+.radius-row button:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
 .selected-activity {
   display: grid;
   gap: 6px;
@@ -639,6 +693,18 @@ dd {
 .activity-list li {
   border-left: 3px solid var(--blue);
   padding-left: 11px;
+}
+
+.activity-list .activity-item-demo {
+  border-left-color: #9a2f22;
+}
+
+.activity-list .activity-item-zba {
+  border-left-color: #6b4fb3;
+}
+
+.activity-list .activity-item-planned-development {
+  border-left-color: var(--amber);
 }
 
 .activity-list strong {
