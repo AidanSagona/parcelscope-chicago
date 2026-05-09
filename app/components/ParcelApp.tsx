@@ -28,6 +28,44 @@ const ACTIVITY_RADIUS_OPTIONS = [
   { label: "0.5 mi", value: 2640 },
 ];
 
+type MemoCitation = {
+  id: string;
+  label: string;
+  url: string;
+  note: string;
+};
+
+type MemoFact = {
+  label: string;
+  value: string;
+  citationId: string;
+};
+
+type MemoRecord = {
+  title: string;
+  meta: string;
+  description?: string;
+  citationId: string;
+  sourceUrl: string;
+  sourceName: string;
+};
+
+type SiteMemoReport = {
+  title: string;
+  subtitle: string;
+  generatedAt: string;
+  generatedLabel: string;
+  summary: string;
+  parcelFacts: MemoFact[];
+  zoningFacts: MemoFact[];
+  overlays: string[];
+  activityItems: MemoRecord[];
+  permitItems: MemoRecord[];
+  verificationItems: string[];
+  citations: MemoCitation[];
+  plainText: string;
+};
+
 function matchParcel(query: string): Parcel | undefined {
   const normalized = query.trim().toLowerCase();
   if (!normalized) return parcels[0];
@@ -100,60 +138,199 @@ function parcelFromLiveParcel(parcel: LiveParcel, query: string): Parcel {
   };
 }
 
-function buildMemo(
+function createCitationCollector() {
+  const citations: MemoCitation[] = [];
+
+  function cite(label: string, url: string, note: string) {
+    const existing = citations.find((citation) => citation.url === url);
+    if (existing) return existing.id;
+
+    const citation: MemoCitation = {
+      id: `S${citations.length + 1}`,
+      label,
+      url,
+      note,
+    };
+    citations.push(citation);
+    return citation.id;
+  }
+
+  return { citations, cite };
+}
+
+function buildReportText(report: Omit<SiteMemoReport, "plainText">) {
+  const parcelFacts = report.parcelFacts
+    .map((fact) => `- ${fact.label}: ${fact.value} [${fact.citationId}]`)
+    .join("\n");
+  const zoningFacts = report.zoningFacts
+    .map((fact) => `- ${fact.label}: ${fact.value} [${fact.citationId}]`)
+    .join("\n");
+  const overlays = report.overlays.length
+    ? report.overlays.map((overlay) => `- ${overlay}`).join("\n")
+    : "- No overlay flags loaded.";
+  const activity = report.activityItems.length
+    ? report.activityItems
+        .map((item) => `- ${item.title} - ${item.meta} [${item.citationId}]`)
+        .join("\n")
+    : "- No matching approval, demolition, ZBA, or planned-development signals loaded.";
+  const permits = report.permitItems.length
+    ? report.permitItems
+        .map((item) => `- ${item.title} - ${item.meta} [${item.citationId}]`)
+        .join("\n")
+    : "- No permit records loaded in the selected radius.";
+  const verification = report.verificationItems.map((item) => `- ${item}`).join("\n");
+  const citations = report.citations
+    .map((citation) => `[${citation.id}] ${citation.label}: ${citation.url}`)
+    .join("\n");
+
+  return `${report.title}
+${report.subtitle}
+Generated ${report.generatedLabel}
+
+Summary
+${report.summary}
+
+Parcel facts
+${parcelFacts}
+
+Zoning and overlays
+${zoningFacts}
+${overlays}
+
+Nearby activity
+${activity}
+
+Permit feed
+${permits}
+
+Manual verification
+${verification}
+
+Sources
+${citations}
+
+Informational triage memo only. Confirm zoning and entitlement status with the City and qualified professionals before acting.`;
+}
+
+function buildSiteMemoReport(
   parcel: Parcel,
   liveZoning?: LiveZoning,
   liveParcel?: LiveParcel,
   livePermits: LivePermit[] = [],
   activityEvents: ActivityEvent[] = [],
   activityRadiusFeet = 1200,
-) {
-  const zoningClass = liveZoning?.zoningClass || parcel.zoning;
+): SiteMemoReport {
+  const { citations, cite } = createCitationCollector();
+  const parcelCitationId = cite(
+    "Cook County parcel layer",
+    sourceLinks.parcels,
+    "Parcel boundary, PIN, ward, municipality, and lot-area reference.",
+  );
+  const zoningCitationId = cite(
+    "Chicago zoning service",
+    liveZoning?.sourceUrl || sourceLinks.zoning,
+    "Current zoning class, ordinance fields, and overlay flags.",
+  );
+  const permitCitationId = cite(
+    "Chicago building permits",
+    sourceLinks.permits,
+    "Permit activity near the selected parcel.",
+  );
   const pin = liveParcel?.pin || parcel.pin;
-  const ward = liveParcel?.ward || parcel.ward;
+  const ward = liveParcel ? liveParcel.ward || "Unavailable" : parcel.ward;
+  const municipality = liveParcel?.municipality || parcel.community;
   const lotArea = liveParcel?.lotArea || parcel.lotArea;
-  const overlaySummary =
-    liveZoning?.overlays.length ? liveZoning.overlays.map((overlay) => overlay.label).join(", ") : "None loaded";
-  const permitSummary = livePermits.length
-    ? livePermits
-        .slice(0, 5)
-        .map(
-          (permit) =>
-            `- ${permit.type}: ${permit.address || permit.permitNumber} (${
-              permit.issueDate?.slice(0, 10) || "unknown date"
-            })`,
-        )
-        .join("\n")
-    : `- No live permits found within the current ${formatActivityRadius(activityRadiusFeet)} radius.`;
-  const eventSummary = activityEvents.length
-    ? activityEvents
-        .slice(0, 8)
-        .map(
-          (event) =>
-            `- ${event.label}: ${event.title}${event.address ? ` at ${event.address}` : ""}${
-              event.distanceFeet ? ` (${event.distanceFeet.toLocaleString()} ft)` : ""
-            }`,
-        )
-        .join("\n")
-    : "- No live approval, demolition, or planned-development events loaded nearby.";
+  const zoningClass = liveZoning?.zoningClass || parcel.zoning;
+  const overlays = liveZoning?.overlays.length
+    ? liveZoning.overlays.map((overlay) => overlay.label)
+    : parcel.badges;
+  const generatedAt = new Date();
+  const generatedLabel = generatedAt.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  const radiusLabel = formatActivityRadius(activityRadiusFeet);
+  const activityItems = activityEvents.slice(0, 12).map((event) => {
+    const citationId = cite(
+      event.sourceName,
+      event.sourceUrl,
+      `${formatActivityKind(event)} activity source.`,
+    );
+    return {
+      title: `${formatActivityKind(event)}: ${event.title}`,
+      meta: [event.date, event.address, formatDistance(event.distanceFeet)]
+        .filter(Boolean)
+        .join(" - "),
+      description: event.description,
+      citationId,
+      sourceUrl: event.sourceUrl,
+      sourceName: event.sourceName,
+    };
+  });
+  const permitItems = livePermits.slice(0, 8).map((permit) => ({
+    title: `${permit.type}: ${permit.address || permit.permitNumber}`,
+    meta: [
+      permit.issueDate?.slice(0, 10) || "Unknown date",
+      permit.reviewType || "Review type unavailable",
+    ].join(" - "),
+    description: permit.description,
+    citationId: permitCitationId,
+    sourceUrl: permit.sourceUrl || sourceLinks.permits,
+    sourceName: "Building Permits",
+  }));
+  const summary = [
+    `${parcel.title} is identified as PIN ${pin} in Ward ${ward}.`,
+    `The current zoning snapshot is ${zoningClass}, with ${overlays.length} overlay or badge signal${
+      overlays.length === 1 ? "" : "s"
+    } loaded.`,
+    `Within ${radiusLabel}, the app found ${activityEvents.length} approval/activity signal${
+      activityEvents.length === 1 ? "" : "s"
+    } and ${livePermits.length} permit record${livePermits.length === 1 ? "" : "s"}.`,
+  ].join(" ");
+  const reportBase: Omit<SiteMemoReport, "plainText"> = {
+    title: `${parcel.title} Site Memo`,
+    subtitle: `Parcel-first zoning and approvals snapshot for ${municipality}`,
+    generatedAt: generatedAt.toISOString(),
+    generatedLabel,
+    summary,
+    parcelFacts: [
+      { label: "PIN", value: pin, citationId: parcelCitationId },
+      { label: "Ward", value: ward, citationId: parcelCitationId },
+      { label: "Municipality / area", value: municipality, citationId: parcelCitationId },
+      { label: "Lot area", value: lotArea, citationId: parcelCitationId },
+    ],
+    zoningFacts: [
+      { label: "Zoning class", value: zoningClass, citationId: zoningCitationId },
+      {
+        label: "Ordinance",
+        value: [liveZoning?.ordinanceNumber, liveZoning?.ordinanceDate, liveZoning?.clerkDocument]
+          .filter(Boolean)
+          .join(" - ") || "Not loaded",
+        citationId: zoningCitationId,
+      },
+    ],
+    overlays,
+    activityItems,
+    permitItems,
+    verificationItems: [
+      "Confirm zoning class, overlays, and ordinance references against the City zoning service.",
+      "Open the cited permit, ZBA, planned-development, and demolition records before making entitlement assumptions.",
+      "Treat this as deal-triage intelligence, not a legal zoning opinion or permit filing determination.",
+    ],
+    citations,
+  };
 
-  return `${parcel.title}
+  return {
+    ...reportBase,
+    plainText: buildReportText(reportBase),
+  };
+}
 
-First-pass summary:
-The selected parcel is identified as PIN ${pin} in Ward ${ward}, ${parcel.community}. Lot area is ${lotArea}. The current zoning snapshot is ${zoningClass}. Applicable live overlay flags: ${overlaySummary}.
-
-Live approvals and map activity:
-${eventSummary}
-
-Live permit feed:
-${permitSummary}
-
-Manual verification checklist:
-- Confirm current zoning and overlays against the City Zoning_update service.
-- Confirm permit records against the Chicago Building Permits dataset.
-- Confirm discretionary actions against Plan Commission, ZBA, and City Clerk records.
-
-This draft is an informational triage memo, not a legal zoning opinion.`;
+function citationUrl(report: SiteMemoReport, citationId: string) {
+  return report.citations.find((citation) => citation.id === citationId)?.url || "#";
 }
 
 function getWatchlistKey(parcel: Parcel, liveParcel?: LiveParcel) {
@@ -250,7 +427,8 @@ export default function ParcelApp() {
   const [watchlistReady, setWatchlistReady] = useState(false);
   const [watchlistError, setWatchlistError] = useState("");
   const [isSavingParcel, setIsSavingParcel] = useState(false);
-  const [memo, setMemo] = useState("");
+  const [siteMemo, setSiteMemo] = useState<SiteMemoReport | undefined>();
+  const [copyStatus, setCopyStatus] = useState("");
   const [livePermits, setLivePermits] = useState<LivePermit[]>([]);
   const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
   const [activityError, setActivityError] = useState("");
@@ -316,12 +494,66 @@ export default function ParcelApp() {
     setSelectedActivityEvent(undefined);
     setActivityError("");
     setPermitError("");
-    setMemo("");
+    setSiteMemo(undefined);
+    setCopyStatus("");
+  }
+
+  function generateSiteMemo() {
+    if (!selectedParcel) return;
+    setSiteMemo(
+      buildSiteMemoReport(
+        selectedParcel,
+        liveZoning,
+        liveParcel,
+        livePermits,
+        filteredActivityEvents,
+        activityRadiusFeet,
+      ),
+    );
+    setCopyStatus("");
+  }
+
+  async function copySiteMemo() {
+    if (!siteMemo) return;
+
+    try {
+      let copied = false;
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(siteMemo.plainText);
+          copied = true;
+        } catch {
+          copied = false;
+        }
+      }
+
+      if (!copied) {
+        const textArea = document.createElement("textarea");
+        textArea.value = siteMemo.plainText;
+        textArea.setAttribute("readonly", "");
+        textArea.style.position = "fixed";
+        textArea.style.left = "-9999px";
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textArea);
+      }
+
+      setCopyStatus("Copied");
+    } catch {
+      setCopyStatus("Copy failed");
+    }
+  }
+
+  function printSiteMemo() {
+    if (!siteMemo) return;
+    window.print();
   }
 
   async function handleSearch(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setMemo("");
+    setSiteMemo(undefined);
+    setCopyStatus("");
     setSearchError("");
     setIsSearching(true);
     setLivePermits([]);
@@ -398,7 +630,8 @@ export default function ParcelApp() {
     setZoningError("");
     setParcelError("");
     setSearchError("");
-    setMemo("");
+    setSiteMemo(undefined);
+    setCopyStatus("");
   }, []);
 
   async function toggleSaved() {
@@ -471,7 +704,8 @@ export default function ParcelApp() {
     setZoningError("");
     setParcelError("");
     setSearchError("");
-    setMemo("");
+    setSiteMemo(undefined);
+    setCopyStatus("");
   }
 
   useEffect(() => {
@@ -959,31 +1193,159 @@ export default function ParcelApp() {
               </ol>
             </section>
 
-            <section className="card">
-              <div className="section-line">
-                <h3>Site Memo Draft</h3>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setMemo(
-                      buildMemo(
-                        selectedParcel,
-                        liveZoning,
-                        liveParcel,
-                        livePermits,
-                        filteredActivityEvents,
-                        activityRadiusFeet,
-                      ),
-                    )
-                  }
-                >
-                  Generate
+            <section className="card printable-report-card">
+              <div className="section-line report-title-row">
+                <div>
+                  <h3>Source-Linked Site Memo</h3>
+                  <p className="muted">
+                    Generates a client-ready parcel snapshot with citations.
+                  </p>
+                </div>
+                <button type="button" onClick={generateSiteMemo}>
+                  Generate report
                 </button>
               </div>
-              <div className="memo-output">
-                {memo ||
-                  "Generate a first-pass memo from parcel facts, zoning flags, and nearby activity."}
-              </div>
+
+              {siteMemo ? (
+                <>
+                  <div className="report-actions">
+                    <button type="button" onClick={copySiteMemo}>
+                      Copy text
+                    </button>
+                    <button type="button" onClick={printSiteMemo}>
+                      Print / save PDF
+                    </button>
+                    {copyStatus ? <span>{copyStatus}</span> : null}
+                  </div>
+
+                  <article className="site-report" aria-label="Generated site memo">
+                    <header className="report-cover">
+                      <p className="eyebrow">ParcelScope site memo</p>
+                      <h2>{siteMemo.title}</h2>
+                      <p>{siteMemo.subtitle}</p>
+                      <span>Generated {siteMemo.generatedLabel}</span>
+                    </header>
+
+                    <section className="report-section">
+                      <h4>Executive Summary</h4>
+                      <p>{siteMemo.summary}</p>
+                    </section>
+
+                    <section className="report-section">
+                      <h4>Parcel Facts</h4>
+                      <dl className="report-facts">
+                        {siteMemo.parcelFacts.map((fact) => (
+                          <div key={fact.label}>
+                            <dt>{fact.label}</dt>
+                            <dd>
+                              {fact.value}{" "}
+                              <a href={citationUrl(siteMemo, fact.citationId)} target="_blank" rel="noreferrer">
+                                [{fact.citationId}]
+                              </a>
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </section>
+
+                    <section className="report-section">
+                      <h4>Zoning And Overlays</h4>
+                      <dl className="report-facts">
+                        {siteMemo.zoningFacts.map((fact) => (
+                          <div key={fact.label}>
+                            <dt>{fact.label}</dt>
+                            <dd>
+                              {fact.value}{" "}
+                              <a href={citationUrl(siteMemo, fact.citationId)} target="_blank" rel="noreferrer">
+                                [{fact.citationId}]
+                              </a>
+                            </dd>
+                          </div>
+                        ))}
+                      </dl>
+                      <div className="report-badges">
+                        {siteMemo.overlays.length ? (
+                          siteMemo.overlays.map((overlay) => <span key={overlay}>{overlay}</span>)
+                        ) : (
+                          <span>No overlay flags loaded</span>
+                        )}
+                      </div>
+                    </section>
+
+                    <section className="report-section">
+                      <h4>Nearby Activity</h4>
+                      {siteMemo.activityItems.length ? (
+                        <ol className="report-records">
+                          {siteMemo.activityItems.map((item) => (
+                            <li key={`${item.title}-${item.meta}`}>
+                              <strong>{item.title}</strong>
+                              <span>
+                                {item.meta}{" "}
+                                <a href={item.sourceUrl} target="_blank" rel="noreferrer">
+                                  [{item.citationId}]
+                                </a>
+                              </span>
+                              {item.description ? <p>{item.description}</p> : null}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <p className="muted">No matching approval, demolition, ZBA, or PD signals loaded.</p>
+                      )}
+                    </section>
+
+                    <section className="report-section">
+                      <h4>Permit Feed</h4>
+                      {siteMemo.permitItems.length ? (
+                        <ol className="report-records">
+                          {siteMemo.permitItems.map((item) => (
+                            <li key={`${item.title}-${item.meta}`}>
+                              <strong>{item.title}</strong>
+                              <span>
+                                {item.meta}{" "}
+                                <a href={item.sourceUrl} target="_blank" rel="noreferrer">
+                                  [{item.citationId}]
+                                </a>
+                              </span>
+                              {item.description ? <p>{item.description}</p> : null}
+                            </li>
+                          ))}
+                        </ol>
+                      ) : (
+                        <p className="muted">No permit records loaded in the selected radius.</p>
+                      )}
+                    </section>
+
+                    <section className="report-section">
+                      <h4>Manual Verification</h4>
+                      <ul className="report-checklist">
+                        {siteMemo.verificationItems.map((item) => (
+                          <li key={item}>{item}</li>
+                        ))}
+                      </ul>
+                    </section>
+
+                    <section className="report-section">
+                      <h4>Sources</h4>
+                      <ol className="report-sources">
+                        {siteMemo.citations.map((citation) => (
+                          <li key={citation.id}>
+                            <a href={citation.url} target="_blank" rel="noreferrer">
+                              [{citation.id}] {citation.label}
+                            </a>
+                            <span>{citation.note}</span>
+                          </li>
+                        ))}
+                      </ol>
+                    </section>
+                  </article>
+                </>
+              ) : (
+                <div className="memo-output">
+                  Generate a first-pass report from parcel facts, zoning flags, nearby activity,
+                  and source citations.
+                </div>
+              )}
             </section>
           </>
         )}
