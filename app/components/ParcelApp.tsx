@@ -3,6 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { SignInButton, SignUpButton, UserButton, useUser } from "@clerk/nextjs";
 import dynamic from "next/dynamic";
+import { ActivityEvent } from "../data/activityEvents";
 import { GeocodeResult } from "../data/geocode";
 import { LiveParcel } from "../data/liveParcel";
 import { Parcel, parcels, sourceLinks } from "../data/sampleParcels";
@@ -92,10 +93,8 @@ function buildMemo(
   liveZoning?: LiveZoning,
   liveParcel?: LiveParcel,
   livePermits: LivePermit[] = [],
+  activityEvents: ActivityEvent[] = [],
 ) {
-  const activitySummary = parcel.activity
-    .map((item) => `- ${item.type}: ${item.title} (${item.date}, ${item.distance})`)
-    .join("\n");
   const zoningClass = liveZoning?.zoningClass || parcel.zoning;
   const pin = liveParcel?.pin || parcel.pin;
   const ward = liveParcel?.ward || parcel.ward;
@@ -113,14 +112,25 @@ function buildMemo(
         )
         .join("\n")
     : "- No live permits found within the current 1,200 ft radius.";
+  const eventSummary = activityEvents.length
+    ? activityEvents
+        .slice(0, 8)
+        .map(
+          (event) =>
+            `- ${event.label}: ${event.title}${event.address ? ` at ${event.address}` : ""}${
+              event.distanceFeet ? ` (${event.distanceFeet.toLocaleString()} ft)` : ""
+            }`,
+        )
+        .join("\n")
+    : "- No live approval, demolition, or planned-development events loaded nearby.";
 
   return `${parcel.title}
 
 First-pass summary:
 The selected parcel is identified as PIN ${pin} in Ward ${ward}, ${parcel.community}. Lot area is ${lotArea}. The current zoning snapshot is ${zoningClass}. Applicable live overlay flags: ${overlaySummary}.
 
-Nearby approval and permit signals:
-${activitySummary || "- No discretionary approval activity loaded for this parcel yet."}
+Live approvals and map activity:
+${eventSummary}
 
 Live permit feed:
 ${permitSummary}
@@ -190,6 +200,18 @@ function formatSavedDate(value: string) {
   }).format(new Date(value));
 }
 
+function formatDistance(value?: number) {
+  if (!Number.isFinite(value)) return "";
+  return `${Math.round(value as number).toLocaleString()} ft`;
+}
+
+function formatActivityKind(event: ActivityEvent) {
+  if (event.kind === "planned-development") return "Planned Development";
+  if (event.kind === "zba") return "ZBA";
+  if (event.kind === "demo") return "Demo";
+  return "Permit";
+}
+
 export default function ParcelApp() {
   const { isLoaded: isAuthLoaded, isSignedIn } = useUser();
   const [selectedParcel, setSelectedParcel] = useState<Parcel | undefined>(parcels[0]);
@@ -200,6 +222,9 @@ export default function ParcelApp() {
   const [isSavingParcel, setIsSavingParcel] = useState(false);
   const [memo, setMemo] = useState("");
   const [livePermits, setLivePermits] = useState<LivePermit[]>([]);
+  const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
+  const [activityError, setActivityError] = useState("");
+  const [selectedActivityEvent, setSelectedActivityEvent] = useState<ActivityEvent | undefined>();
   const [permitError, setPermitError] = useState("");
   const [liveZoning, setLiveZoning] = useState<LiveZoning | undefined>();
   const [zoningError, setZoningError] = useState("");
@@ -227,6 +252,9 @@ export default function ParcelApp() {
     setSearchError("");
     setIsSearching(true);
     setLivePermits([]);
+    setActivityEvents([]);
+    setSelectedActivityEvent(undefined);
+    setActivityError("");
     setLiveZoning(undefined);
     setLiveParcel(undefined);
     const parcel = matchParcel(query);
@@ -261,6 +289,9 @@ export default function ParcelApp() {
       if (!result) {
         setSelectedParcel(undefined);
         setLivePermits([]);
+        setActivityEvents([]);
+        setSelectedActivityEvent(undefined);
+        setActivityError("");
         setLiveZoning(undefined);
         setLiveParcel(undefined);
         setSearchError("No Chicago address match found. Try a fuller street address.");
@@ -271,6 +302,9 @@ export default function ParcelApp() {
     } catch {
       setSelectedParcel(undefined);
       setLivePermits([]);
+      setActivityEvents([]);
+      setSelectedActivityEvent(undefined);
+      setActivityError("");
       setLiveZoning(undefined);
       setLiveParcel(undefined);
       setSearchError("Address lookup is unavailable right now.");
@@ -282,6 +316,9 @@ export default function ParcelApp() {
   const selectParcel = useCallback((parcel: Parcel) => {
     setSelectedParcel(parcel);
     setLivePermits([]);
+    setActivityEvents([]);
+    setSelectedActivityEvent(undefined);
+    setActivityError("");
     setLiveZoning(undefined);
     setLiveParcel(undefined);
     setPermitError("");
@@ -352,6 +389,9 @@ export default function ParcelApp() {
     setSelectedParcel(parcel);
     setQuery(item.title);
     setLivePermits([]);
+    setActivityEvents([]);
+    setSelectedActivityEvent(undefined);
+    setActivityError("");
     setLiveZoning(undefined);
     setLiveParcel(undefined);
     setPermitError("");
@@ -416,6 +456,31 @@ export default function ParcelApp() {
         if (error.name !== "AbortError") {
           setLivePermits([]);
           setPermitError("Live permit feed is unavailable right now.");
+        }
+      })
+      .catch(() => undefined);
+
+    return () => controller.abort();
+  }, [selectedParcel]);
+
+  useEffect(() => {
+    if (!selectedParcel) return;
+
+    const controller = new AbortController();
+    const [lng, lat] = selectedParcel.coordinates;
+
+    fetch(`/api/activity?lat=${lat}&lng=${lng}&radiusFeet=1200&limit=30`, {
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) throw new Error("Unable to load activity.");
+        return response.json() as Promise<{ events: ActivityEvent[] }>;
+      })
+      .then((data) => setActivityEvents(data.events))
+      .catch((error: Error) => {
+        if (error.name !== "AbortError") {
+          setActivityEvents([]);
+          setActivityError("Live approval and activity feed is unavailable right now.");
         }
       })
       .catch(() => undefined);
@@ -520,8 +585,8 @@ export default function ParcelApp() {
         <ChicagoMap
           selectedParcel={selectedParcel}
           liveParcel={liveParcel}
-          livePermits={livePermits}
           onSelectParcel={selectParcel}
+          onSelectActivity={setSelectedActivityEvent}
         />
       </section>
 
@@ -701,23 +766,45 @@ export default function ParcelApp() {
             <section className="card">
               <div className="section-line">
                 <h3>Approval Activity</h3>
-                <span>500 ft</span>
+                <span>{activityEvents.length} nearby</span>
               </div>
-              {selectedParcel.activity.length === 0 ? (
-                <p className="muted">No discretionary approval events loaded for this parcel yet.</p>
+              {selectedActivityEvent ? (
+                <div className="selected-activity">
+                  <span className={`event-kind event-kind-${selectedActivityEvent.kind}`}>
+                    {formatActivityKind(selectedActivityEvent)}
+                  </span>
+                  <strong>{selectedActivityEvent.title}</strong>
+                  {selectedActivityEvent.address ? <p>{selectedActivityEvent.address}</p> : null}
+                  {selectedActivityEvent.description ? (
+                    <p className="muted">{selectedActivityEvent.description}</p>
+                  ) : null}
+                  <a href={selectedActivityEvent.sourceUrl} target="_blank" rel="noreferrer">
+                    Source: {selectedActivityEvent.sourceName}
+                  </a>
+                </div>
+              ) : null}
+              {activityError ? <p className="error-text">{activityError}</p> : null}
+              {!activityError && activityEvents.length === 0 ? (
+                <p className="muted">
+                  No approvals, demolitions, or planned-development activity loaded within 1,200
+                  feet.
+                </p>
               ) : null}
               <ol className="activity-list">
-                {selectedParcel.activity.map((item) => (
-                  <li key={`${item.type}-${item.title}`}>
+                {activityEvents.slice(0, 12).map((event) => (
+                  <li key={event.id}>
                     <strong>
-                      {item.type}: {item.title}
+                      {formatActivityKind(event)}: {event.title}
                     </strong>
                     <span>
-                      {item.date} - {item.distance} -{" "}
-                      <a href={item.url} target="_blank" rel="noreferrer">
+                      {[event.date, event.address, formatDistance(event.distanceFeet)]
+                        .filter(Boolean)
+                        .join(" - ")}{" "}
+                      <a href={event.sourceUrl} target="_blank" rel="noreferrer">
                         Source
                       </a>
                     </span>
+                    {event.description ? <p>{event.description}</p> : null}
                   </li>
                 ))}
               </ol>
@@ -759,7 +846,15 @@ export default function ParcelApp() {
                 <button
                   type="button"
                   onClick={() =>
-                    setMemo(buildMemo(selectedParcel, liveZoning, liveParcel, livePermits))
+                    setMemo(
+                      buildMemo(
+                        selectedParcel,
+                        liveZoning,
+                        liveParcel,
+                        livePermits,
+                        activityEvents,
+                      ),
+                    )
                   }
                 >
                   Generate

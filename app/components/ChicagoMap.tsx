@@ -9,20 +9,29 @@ import maplibregl, {
   type StyleSpecification,
 } from "maplibre-gl";
 import type { Feature, FeatureCollection, Polygon } from "geojson";
+import type {
+  ActivityEvent,
+  ActivityEventFeatureCollection,
+  ActivityEventProperties,
+} from "../data/activityEvents";
 import type { LiveParcel } from "../data/liveParcel";
 import type { MapParcelFeatureCollection, MapParcelProperties } from "../data/mapParcels";
 import type { Parcel } from "../data/sampleParcels";
-import type { LivePermit } from "../data/livePermits";
 
 type ChicagoMapProps = {
   selectedParcel?: Parcel;
   liveParcel?: LiveParcel;
-  livePermits: LivePermit[];
   onSelectParcel: (parcel: Parcel) => void;
+  onSelectActivity: (event: ActivityEvent) => void;
 };
 
 type MutableGeoJsonSource = {
-  setData: (data: Feature<Polygon> | FeatureCollection<Polygon, MapParcelProperties>) => void;
+  setData: (
+    data:
+      | Feature<Polygon>
+      | FeatureCollection<Polygon, MapParcelProperties>
+      | ActivityEventFeatureCollection
+  ) => void;
 };
 
 type ParcelMapResponse = {
@@ -32,16 +41,29 @@ type ParcelMapResponse = {
   exceededTransferLimit?: boolean;
 };
 
+type ActivityMapResponse = {
+  geojson: ActivityEventFeatureCollection;
+  count: number;
+  needsZoom?: boolean;
+};
+
 const VIEWPORT_PARCELS_SOURCE_ID = "viewport-parcels-source";
 const VIEWPORT_PARCELS_FILL_LAYER_ID = "viewport-parcels-fill";
 const VIEWPORT_PARCELS_LINE_LAYER_ID = "viewport-parcels-line";
 const VIEWPORT_PARCELS_SELECTED_FILL_LAYER_ID = "viewport-parcels-selected-fill";
 const VIEWPORT_PARCELS_SELECTED_LINE_LAYER_ID = "viewport-parcels-selected-line";
+const ACTIVITY_SOURCE_ID = "activity-events-source";
+const ACTIVITY_CIRCLE_LAYER_ID = "activity-events-circle";
 const PARCEL_SOURCE_ID = "selected-parcel-source";
 const PARCEL_FILL_LAYER_ID = "selected-parcel-fill";
 const PARCEL_LINE_LAYER_ID = "selected-parcel-line";
 const PARCEL_MIN_ZOOM = 13.25;
+const ACTIVITY_MIN_ZOOM = 12.25;
 const EMPTY_PARCELS: MapParcelFeatureCollection = {
+  type: "FeatureCollection",
+  features: [],
+};
+const EMPTY_ACTIVITY: ActivityEventFeatureCollection = {
   type: "FeatureCollection",
   features: [],
 };
@@ -100,19 +122,51 @@ function mapFeatureToParcel(feature: MapGeoJSONFeature): Parcel | undefined {
   };
 }
 
+function mapFeatureToActivity(feature: MapGeoJSONFeature): ActivityEvent | undefined {
+  const properties = feature.properties as Partial<ActivityEventProperties> | null;
+  if (
+    !properties?.id ||
+    !properties.kind ||
+    !properties.label ||
+    !properties.title ||
+    !properties.sourceName ||
+    !properties.sourceUrl ||
+    !Number.isFinite(Number(properties.lng)) ||
+    !Number.isFinite(Number(properties.lat))
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: properties.id,
+    kind: properties.kind,
+    label: properties.label,
+    title: properties.title,
+    date: properties.date,
+    address: properties.address,
+    description: properties.description,
+    distanceFeet: Number.isFinite(Number(properties.distanceFeet))
+      ? Number(properties.distanceFeet)
+      : undefined,
+    coordinates: [Number(properties.lng), Number(properties.lat)],
+    sourceName: properties.sourceName,
+    sourceUrl: properties.sourceUrl,
+  };
+}
+
 export default function ChicagoMap({
   selectedParcel,
   liveParcel,
-  livePermits,
   onSelectParcel,
+  onSelectActivity,
 }: ChicagoMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const searchMarkerRef = useRef<Marker | null>(null);
-  const permitMarkersRef = useRef<Marker[]>([]);
   const initialCenterRef = useRef<[number, number]>(selectedParcel?.coordinates || [-87.6582, 41.8868]);
   const initialSelectedFilterRef = useRef(selectedParcelFilter(selectedParcel));
   const [parcelStatus, setParcelStatus] = useState("Loading parcel boundaries...");
+  const [activityStatus, setActivityStatus] = useState("Loading approvals and activity...");
 
   useEffect(() => {
     if (!containerRef.current || mapRef.current) return;
@@ -127,7 +181,19 @@ export default function ChicagoMap({
     });
 
     let latestRequestId = 0;
+    let latestActivityRequestId = 0;
     let parcelController: AbortController | null = null;
+    let activityController: AbortController | null = null;
+
+    function currentBbox() {
+      const bounds = map.getBounds();
+      return [
+        bounds.getWest(),
+        bounds.getSouth(),
+        bounds.getEast(),
+        bounds.getNorth(),
+      ].join(",");
+    }
 
     async function loadViewportParcels() {
       const source = map.getSource(VIEWPORT_PARCELS_SOURCE_ID) as MutableGeoJsonSource | undefined;
@@ -140,14 +206,6 @@ export default function ChicagoMap({
         return;
       }
 
-      const bounds = map.getBounds();
-      const bbox = [
-        bounds.getWest(),
-        bounds.getSouth(),
-        bounds.getEast(),
-        bounds.getNorth(),
-      ].join(",");
-
       const requestId = latestRequestId + 1;
       latestRequestId = requestId;
       parcelController?.abort();
@@ -155,9 +213,12 @@ export default function ChicagoMap({
       setParcelStatus("Loading parcel boundaries...");
 
       try {
-        const response = await fetch(`/api/parcels?bbox=${encodeURIComponent(bbox)}&limit=350`, {
-          signal: parcelController.signal,
-        });
+        const response = await fetch(
+          `/api/parcels?bbox=${encodeURIComponent(currentBbox())}&limit=350`,
+          {
+            signal: parcelController.signal,
+          },
+        );
         if (!response.ok) throw new Error("Parcel map request failed.");
 
         const data = (await response.json()) as ParcelMapResponse;
@@ -179,6 +240,53 @@ export default function ChicagoMap({
         if (requestId === latestRequestId) {
           source.setData(EMPTY_PARCELS);
           setParcelStatus("Parcel map feed is unavailable right now.");
+        }
+      }
+    }
+
+    async function loadViewportActivity() {
+      const source = map.getSource(ACTIVITY_SOURCE_ID) as MutableGeoJsonSource | undefined;
+      if (!source) return;
+
+      if (map.getZoom() < ACTIVITY_MIN_ZOOM) {
+        activityController?.abort();
+        source.setData(EMPTY_ACTIVITY);
+        setActivityStatus("Zoom in to load permits, demolitions, ZBA cases, and PDs.");
+        return;
+      }
+
+      const requestId = latestActivityRequestId + 1;
+      latestActivityRequestId = requestId;
+      activityController?.abort();
+      activityController = new AbortController();
+      setActivityStatus("Loading approvals and activity...");
+
+      try {
+        const response = await fetch(
+          `/api/activity?bbox=${encodeURIComponent(currentBbox())}&limit=120`,
+          {
+            signal: activityController.signal,
+          },
+        );
+        if (!response.ok) throw new Error("Activity map request failed.");
+
+        const data = (await response.json()) as ActivityMapResponse;
+        if (requestId !== latestActivityRequestId) return;
+
+        source.setData(data.geojson);
+
+        if (data.needsZoom) {
+          setActivityStatus("Zoom in closer to load approval and permit activity.");
+        } else if (data.count === 0) {
+          setActivityStatus("No activity signals returned for this view.");
+        } else {
+          setActivityStatus(`${data.count.toLocaleString()} approval, permit, and demo signals loaded.`);
+        }
+      } catch (error) {
+        if (error instanceof Error && error.name === "AbortError") return;
+        if (requestId === latestActivityRequestId) {
+          source.setData(EMPTY_ACTIVITY);
+          setActivityStatus("Activity feed is unavailable right now.");
         }
       }
     }
@@ -235,9 +343,44 @@ export default function ChicagoMap({
         },
       });
 
+      map.addSource(ACTIVITY_SOURCE_ID, {
+        type: "geojson",
+        data: EMPTY_ACTIVITY,
+      });
+
+      map.addLayer({
+        id: ACTIVITY_CIRCLE_LAYER_ID,
+        type: "circle",
+        source: ACTIVITY_SOURCE_ID,
+        paint: {
+          "circle-color": [
+            "match",
+            ["get", "kind"],
+            "permit",
+            "#215f9a",
+            "demo",
+            "#9a2f22",
+            "zba",
+            "#6b4fb3",
+            "planned-development",
+            "#a56812",
+            "#33443c",
+          ],
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 12, 4, 15, 7, 17, 10],
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2,
+          "circle-opacity": 0.92,
+        },
+      });
+
       map.on("click", VIEWPORT_PARCELS_FILL_LAYER_ID, (event) => {
         const parcel = event.features?.[0] ? mapFeatureToParcel(event.features[0]) : undefined;
         if (parcel) onSelectParcel(parcel);
+      });
+
+      map.on("click", ACTIVITY_CIRCLE_LAYER_ID, (event) => {
+        const activity = event.features?.[0] ? mapFeatureToActivity(event.features[0]) : undefined;
+        if (activity) onSelectActivity(activity);
       });
 
       map.on("mouseenter", VIEWPORT_PARCELS_FILL_LAYER_ID, () => {
@@ -248,9 +391,21 @@ export default function ChicagoMap({
         map.getCanvas().style.cursor = "";
       });
 
-      map.on("moveend", loadViewportParcels);
+      map.on("mouseenter", ACTIVITY_CIRCLE_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+
+      map.on("mouseleave", ACTIVITY_CIRCLE_LAYER_ID, () => {
+        map.getCanvas().style.cursor = "";
+      });
+
+      map.on("moveend", () => {
+        void loadViewportParcels();
+        void loadViewportActivity();
+      });
       map.resize();
       void loadViewportParcels();
+      void loadViewportActivity();
     });
 
     mapRef.current = map;
@@ -262,12 +417,13 @@ export default function ChicagoMap({
 
     return () => {
       parcelController?.abort();
+      activityController?.abort();
       resizeObserver.disconnect();
       map.remove();
       mapRef.current = null;
       searchMarkerRef.current = null;
     };
-  }, [onSelectParcel]);
+  }, [onSelectActivity, onSelectParcel]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -303,31 +459,6 @@ export default function ChicagoMap({
       });
     }
   }, [selectedParcel]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map) return;
-
-    permitMarkersRef.current.forEach((marker) => marker.remove());
-    permitMarkersRef.current = livePermits.map((permit) => {
-      const element = document.createElement("a");
-      element.className = "permit-marker";
-      element.href = permit.sourceUrl;
-      element.target = "_blank";
-      element.rel = "noreferrer";
-      element.setAttribute("aria-label", `Open permit ${permit.permitNumber}`);
-      element.textContent = "P";
-
-      return new maplibregl.Marker({ element, anchor: "center" })
-        .setLngLat(permit.coordinates)
-        .addTo(map);
-    });
-
-    return () => {
-      permitMarkersRef.current.forEach((marker) => marker.remove());
-      permitMarkersRef.current = [];
-    };
-  }, [livePermits]);
 
   useEffect(() => {
     const activeMap = mapRef.current;
@@ -394,7 +525,10 @@ export default function ChicagoMap({
   return (
     <div className="real-map-shell">
       <div ref={containerRef} className="real-map" />
-      <div className="parcel-map-status">{parcelStatus}</div>
+      <div className="map-status-stack">
+        <div className="parcel-map-status">{parcelStatus}</div>
+        <div className="parcel-map-status activity-map-status">{activityStatus}</div>
+      </div>
       <div className="map-legend">
         <span>
           <i className="legend-parcels" />
@@ -406,7 +540,19 @@ export default function ChicagoMap({
         </span>
         <span>
           <i className="legend-permit" />
-          Live permits
+          Permits
+        </span>
+        <span>
+          <i className="legend-demo" />
+          Demos
+        </span>
+        <span>
+          <i className="legend-zba" />
+          ZBA
+        </span>
+        <span>
+          <i className="legend-pd" />
+          PDs
         </span>
         <span>
           <i className="legend-search" />

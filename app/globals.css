@@ -364,11 +364,16 @@ h1 {
   font-size: 13px;
 }
 
-.parcel-map-status {
+.map-status-stack {
   position: absolute;
   z-index: 4;
   left: 24px;
   top: 112px;
+  display: grid;
+  gap: 6px;
+}
+
+.parcel-map-status {
   max-width: min(420px, calc(100vw - 470px));
   padding: 9px 11px;
   border: 1px solid rgba(23, 32, 28, 0.12);
@@ -377,6 +382,10 @@ h1 {
   font-size: 12px;
   font-weight: 700;
   box-shadow: 0 8px 20px rgba(23, 32, 28, 0.1);
+}
+
+.activity-map-status {
+  color: #52635b;
 }
 
 .map-legend span {
@@ -390,6 +399,9 @@ h1 {
 .legend-selected,
 .legend-approval,
 .legend-permit,
+.legend-demo,
+.legend-zba,
+.legend-pd,
 .legend-search {
   width: 12px;
   height: 12px;
@@ -420,6 +432,19 @@ h1 {
 
 .legend-permit {
   background: var(--blue);
+}
+
+.legend-demo {
+  background: #9a2f22;
+}
+
+.legend-zba {
+  background: #6b4fb3;
+}
+
+.legend-pd {
+  border-radius: 2px;
+  background: var(--amber);
 }
 
 .legend-search {
@@ -570,6 +595,47 @@ dd {
   list-style: none;
 }
 
+.selected-activity {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 14px;
+  border: 1px solid var(--line);
+  background: #f7faf8;
+  padding: 12px;
+}
+
+.selected-activity strong,
+.selected-activity p {
+  margin: 0;
+}
+
+.event-kind {
+  justify-self: start;
+  padding: 4px 7px;
+  border-radius: 2px;
+  background: #33443c;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.event-kind-permit {
+  background: var(--blue);
+}
+
+.event-kind-demo {
+  background: #9a2f22;
+}
+
+.event-kind-zba {
+  background: #6b4fb3;
+}
+
+.event-kind-planned-development {
+  background: var(--amber);
+}
+
 .activity-list li {
   border-left: 3px solid var(--blue);
   padding-left: 11px;
@@ -578,6 +644,17 @@ dd {
 .activity-list strong {
   display: block;
   margin-bottom: 3px;
+}
+
+.activity-list p {
+  display: -webkit-box;
+  margin: 5px 0 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  line-clamp: 3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
 }
 
 .activity-list a,
@@ -654,9 +731,12 @@ dd {
     justify-content: flex-end;
   }
 
-  .parcel-map-status {
+  .map-status-stack {
     top: auto;
     bottom: 76px;
+  }
+
+  .parcel-map-status {
     max-width: calc(100vw - 48px);
   }
 
